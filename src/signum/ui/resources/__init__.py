@@ -1,0 +1,1 @@
+"""Zasoby statyczne GUI (ikony)."""

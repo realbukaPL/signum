@@ -1,0 +1,86 @@
+"""Wątki robocze Qt — analiza plików i test połączenia poza wątkiem GUI."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from PySide6.QtCore import QThread, Signal
+
+from signum.ai.base import AIError, VisionModel
+from signum.ai.ollama_client import OllamaVisionModel
+from signum.core.models import DocumentResult
+from signum.core.pipeline import BatchResult, CancelToken, DocumentAnalyzer, run_batch
+
+
+class BatchWorker(QThread):
+    """Sekwencyjnie przetwarza partię plików w tle, raportując postęp sygnałami."""
+
+    file_started = Signal(int, int, str)  # indeks, liczba plików, nazwa pliku
+    file_done = Signal(int, object)  # indeks, DocumentResult
+    batch_done = Signal(object)  # BatchResult
+
+    def __init__(self, files: list[Path], analyzer: DocumentAnalyzer) -> None:
+        super().__init__()
+        self._files = files
+        self._analyzer = analyzer
+        self._cancel = CancelToken()
+
+    def cancel(self) -> None:
+        """Żądanie anulowania — wątek zakończy się po bieżącej stronie."""
+        self._cancel.cancel()
+
+    def run(self) -> None:
+        try:
+            batch = run_batch(
+                self._files,
+                self._analyzer,
+                self._cancel,
+                on_file_start=lambda i, n, p: self.file_started.emit(i, n, p.name),
+                on_file_done=self.file_done.emit,
+            )
+        except Exception as exc:  # obrona: wyjątek nie może zabić wątku po cichu
+            batch = BatchResult(abort_error=f"Nieoczekiwany błąd: {exc}")
+        self.batch_done.emit(batch)
+
+
+class ConnectionTestWorker(QThread):
+    """Test połączenia z modelem AI bez blokowania GUI."""
+
+    finished_with_result = Signal(bool, str)  # sukces, komunikat
+
+    def __init__(self, model: VisionModel) -> None:
+        super().__init__()
+        self._model = model
+
+    def run(self) -> None:
+        try:
+            message = self._model.check_connection()
+        except AIError as exc:
+            self.finished_with_result.emit(False, str(exc))
+        except Exception as exc:  # nie przepuszczaj żadnego wyjątku do Qt
+            self.finished_with_result.emit(False, f"Nieoczekiwany błąd: {exc}")
+        else:
+            self.finished_with_result.emit(True, message)
+
+
+class ModelListWorker(QThread):
+    """Pobiera listę modeli z Ollamy (do rozwijanej listy w ustawieniach)."""
+
+    finished_with_result = Signal(bool, object)  # sukces, list[str] | komunikat błędu
+
+    def __init__(self, base_url: str) -> None:
+        super().__init__()
+        self._base_url = base_url
+
+    def run(self) -> None:
+        try:
+            models = OllamaVisionModel.list_models(self._base_url)
+        except AIError as exc:
+            self.finished_with_result.emit(False, str(exc))
+        except Exception as exc:
+            self.finished_with_result.emit(False, f"Nieoczekiwany błąd: {exc}")
+        else:
+            self.finished_with_result.emit(True, models)
+
+
+__all__ = ["BatchWorker", "ConnectionTestWorker", "DocumentResult", "ModelListWorker"]
