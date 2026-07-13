@@ -1,0 +1,17 @@
+# Normalizacja końców linii dla plików tekstowych.
+* text=auto
+
+# Pliki binarne — nigdy nie normalizuj (PDF-y bez NUL w nagłówku git
+# potrafi błędnie uznać za tekst i uszkodzić konwersją CRLF).
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.tif binary
+*.tiff binary
+*.bmp binary
+*.webp binary
+*.ico binary
+
+# Skrypty PowerShell z polskimi znakami — CRLF zgodnie z konwencją Windows.
+*.ps1 text eol=crlf
