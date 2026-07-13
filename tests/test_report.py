@@ -1,0 +1,110 @@
+"""Testy eksportu raportów HTML i CSV."""
+
+from __future__ import annotations
+
+import base64
+import csv
+import io
+from pathlib import Path
+
+from signum.core.models import DocumentResult, DocumentStatus, SignatureFinding, SignatureKind
+from signum.core.pipeline import BatchResult
+from signum.report import build_csv, build_html, write_csv
+
+_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGA"
+    "hKmMIQAAAABJRU5ErkJggg=="
+)
+
+
+def _batch() -> BatchResult:
+    signed = DocumentResult(
+        path=Path("C:/docs/umowa.pdf"),
+        status=DocumentStatus.OK,
+        title="Umowa o dzieło",
+        findings=[
+            SignatureFinding(
+                kind=SignatureKind.HANDWRITTEN, page=1, confidence=92, crop_png=_PNG
+            ),
+            SignatureFinding(
+                kind=SignatureKind.DIGITAL,
+                page=1,
+                confidence=100,
+                detail="PAdES / CAdES (ETSI.CAdES.detached); podpisał(a): Jan Testowy",
+            ),
+        ],
+        page_count=2,
+        pages_analyzed=2,
+        duration_s=12.5,
+    )
+    unsigned = DocumentResult(
+        path=Path("C:/docs/regulamin.pdf"),
+        status=DocumentStatus.OK,
+        title="Regulamin",
+        page_count=1,
+        pages_analyzed=1,
+    )
+    failed = DocumentResult(
+        path=Path("C:/docs/zepsuty.pdf"),
+        status=DocumentStatus.ERROR,
+        error="Nie można odczytać pliku",
+    )
+    return BatchResult(
+        results=[signed, unsigned, failed],
+        model_name="Ollama: gemma4:12b",
+        started_at=1000.0,
+        finished_at=1060.0,
+    )
+
+
+class TestHtml:
+    def test_zawiera_kluczowe_elementy(self) -> None:
+        html = build_html(_batch())
+        assert "Umowa o dzieło" in html
+        assert "PODPISANY (2)" in html
+        assert "BRAK PODPISU" in html
+        assert "BŁĄD" in html
+        assert "podpis odręczny" in html
+        assert "pewność 92%" in html
+        assert "Jan Testowy" in html
+        assert "Ollama: gemma4:12b" in html
+
+    def test_wycinki_osadzone_jako_base64(self) -> None:
+        html = build_html(_batch())
+        assert "data:image/png;base64," in html
+        assert base64.b64encode(_PNG).decode("ascii") in html
+
+    def test_html_escape(self) -> None:
+        batch = _batch()
+        batch.results[0].title = "<script>alert(1)</script>"
+        html = build_html(batch)
+        assert "<script>alert(1)</script>" not in html
+        assert "&lt;script&gt;" in html
+
+    def test_informacja_o_przerwaniu(self) -> None:
+        batch = _batch()
+        batch.abort_error = "Brak połączenia z Ollamą"
+        assert "Brak połączenia z Ollamą" in build_html(batch)
+
+
+class TestCsv:
+    def test_write_csv_bez_podwojnych_crlf(self, tmp_path: Path) -> None:
+        # Regresja: write_text na Windows tłumaczy \n → \r\n, co przy
+        # CRLF w treści dawało \r\r\n (puste wiersze w Excelu).
+        target = tmp_path / "raport.csv"
+        write_csv(target, _batch())
+        raw = target.read_bytes()
+        assert b"\r\r\n" not in raw
+        assert raw.count(b"\r\n") == 4  # nagłówek + 3 wiersze
+        assert raw.startswith(b"\xef\xbb\xbf")  # BOM dla Excela
+
+    def test_struktura_i_wartosci(self) -> None:
+        rows = list(csv.reader(io.StringIO(build_csv(_batch())), delimiter=";"))
+        assert rows[0][:4] == ["plik", "tytul", "status", "podpisany"]
+        assert len(rows) == 4
+        signed_row = rows[1]
+        assert signed_row[1] == "Umowa o dzieło"
+        assert signed_row[3] == "TAK"
+        assert signed_row[4] == "2"
+        assert rows[2][3] == "NIE"
+        assert rows[3][2] == "BŁĄD"
