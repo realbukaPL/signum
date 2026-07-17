@@ -65,7 +65,15 @@ Kluczowe decyzje:
 - **bounding boxy:** konwencja `[ymin, xmin, ymax, xmax]` w skali 0–1000
   (zbadana empirycznie na gemma4:12b — IoU 0.6–0.9). Ramki są walidowane
   (uporządkowanie, zakres, powierzchnia 0–65% strony) i wycinane z paddingiem 15%;
-  ramka niewiarygodna → brak wycinka zamiast błędnego wycinka.
+  ramka niewiarygodna → brak wycinka zamiast błędnego wycinka. Niezależnie od
+  wycinka generowana jest **miniatura całej strony z narysowaną ramką** —
+  także dla ramek odrzuconych, bo błędne wskazanie to informacja dla człowieka.
+  Sufit jakości lokalizacji leży po stronie Ollamy: budżet tokenów wizyjnych
+  gemma4 jest tam zaszyty na 280 (~0,65 Mpx na stronę), choć model wspiera do 1120.
+- **Prompt:** podzielony na część merytoryczną (edytowalną przez użytkownika
+  w ustawieniach, `PROMPT_INSTRUCTIONS`) i stały `PROMPT_FORMAT` z wymaganym
+  schematem JSON, doklejany zawsze — parser i structured outputs zależą od
+  schematu, więc nie wolno go oddać w ręce użytkownika.
 - **Parser odpowiedzi:** nawet ze structured outputs Ollama potrafi dokleić śmieci
   po JSON-ie (zaobserwowane: `<|tool_response>` po poprawnym obiekcie) — parser
   wycina pierwszy zbalansowany obiekt JSON z uwzględnieniem stringów i escape'ów.

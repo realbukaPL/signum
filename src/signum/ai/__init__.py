@@ -36,6 +36,7 @@ def create_vision_model(config: AppConfig, api_key: str | None = None) -> Vision
             base_url=config.ollama_url,
             model=config.ollama_model,
             timeout_s=config.timeout_s,
+            num_ctx=config.ollama_num_ctx,
         )
     if config.provider == "openai":
         return OpenAIVisionModel(

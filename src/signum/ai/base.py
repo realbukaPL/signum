@@ -61,11 +61,15 @@ class VisionModel(ABC):
         Zwraca komunikat dla użytkownika albo rzuca :class:`AIError`.
         """
 
-    def analyze_page(self, image_jpeg: bytes) -> PageAnalysis:
-        """Analizuje stronę: opis dokumentu + podpisy widoczne na obrazie."""
+    def analyze_page(self, image_jpeg: bytes, prompt: str | None = None) -> PageAnalysis:
+        """Analizuje stronę: opis dokumentu + podpisy widoczne na obrazie.
+
+        ``prompt`` pozwala nadpisać domyślny prompt strony (np. część
+        merytoryczną edytowaną w ustawieniach programu).
+        """
         # Import lokalny — parsing importuje typy z tego modułu (cykl importów).
         from signum.ai.parsing import parse_page_analysis  # noqa: PLC0415
         from signum.ai.prompts import PAGE_PROMPT  # noqa: PLC0415
 
-        raw = self._generate(image_jpeg, PAGE_PROMPT)
+        raw = self._generate(image_jpeg, prompt or PAGE_PROMPT)
         return parse_page_analysis(raw)

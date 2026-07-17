@@ -10,6 +10,7 @@ from signum.ai.base import AIConnectionError, AIResponseError, VisionModel
 from signum.ai.prompts import RESPONSE_SCHEMA
 
 DEFAULT_URL = "http://localhost:11434"
+DEFAULT_NUM_CTX = 8192
 
 
 class OllamaVisionModel(VisionModel):
@@ -19,10 +20,17 @@ class OllamaVisionModel(VisionModel):
     poprawia zgodność odpowiedzi ze schematem; resztę dosztywnia parser.
     """
 
-    def __init__(self, base_url: str, model: str, timeout_s: int = 300) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        timeout_s: int = 300,
+        num_ctx: int = DEFAULT_NUM_CTX,
+    ) -> None:
         self._base_url = (base_url or DEFAULT_URL).rstrip("/")
         self._model = model
         self._timeout_s = timeout_s
+        self._num_ctx = num_ctx
 
     @property
     def name(self) -> str:
@@ -40,7 +48,7 @@ class OllamaVisionModel(VisionModel):
             ],
             "stream": False,
             "format": RESPONSE_SCHEMA,
-            "options": {"temperature": 0},
+            "options": {"temperature": 0, "num_ctx": self._num_ctx},
         }
         try:
             response = requests.post(

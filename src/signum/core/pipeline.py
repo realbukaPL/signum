@@ -14,7 +14,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from signum.ai.base import AIConnectionError, AIError, PageAnalysis, VisionModel
-from signum.core.cropping import crop_box_2d, crop_pdf_rect, to_png_bytes
+from signum.core.cropping import (
+    crop_box_2d,
+    crop_pdf_rect,
+    overview_box_2d,
+    overview_pdf_rect,
+    to_jpeg_bytes,
+    to_png_bytes,
+)
 from signum.core.digital import DigitalSignature, scan_digital_signatures
 from signum.core.models import DocumentResult, DocumentStatus, SignatureFinding, SignatureKind
 from signum.core.rendering import (
@@ -75,10 +82,17 @@ class BatchResult:
 class DocumentAnalyzer:
     """Analizuje pojedynczy dokument: struktura PDF + strony przez model wizyjny."""
 
-    def __init__(self, model: VisionModel, max_pages: int, image_max_side: int) -> None:
+    def __init__(
+        self,
+        model: VisionModel,
+        max_pages: int,
+        image_max_side: int,
+        prompt: str | None = None,
+    ) -> None:
         self._model = model
         self._max_pages = max_pages
         self._image_max_side = image_max_side
+        self._prompt = prompt  # None = domyślny prompt programu
 
     @property
     def model_name(self) -> str:
@@ -121,16 +135,21 @@ class DocumentAnalyzer:
                 result.title = analysis.description
             for sig in analysis.signatures:
                 crop_png = None
+                overview_jpeg = None
                 if sig.box_2d is not None:
                     crop = crop_box_2d(page.image, sig.box_2d)
                     if crop is not None:
                         crop_png = to_png_bytes(crop)
+                    overview = overview_box_2d(page.image, sig.box_2d)
+                    if overview is not None:
+                        overview_jpeg = to_jpeg_bytes(overview)
                 result.findings.append(
                     SignatureFinding(
                         kind=sig.kind,
                         page=page.number,
                         confidence=sig.confidence,
                         crop_png=crop_png,
+                        overview_jpeg=overview_jpeg,
                     )
                 )
             result.pages_analyzed += 1
@@ -144,7 +163,7 @@ class DocumentAnalyzer:
         last_error: AIError | None = None
         for _attempt in range(1 + PAGE_RETRIES):
             try:
-                return self._model.analyze_page(jpeg)
+                return self._model.analyze_page(jpeg, self._prompt)
             except AIConnectionError:
                 raise
             except AIError as exc:
@@ -158,31 +177,37 @@ class DocumentAnalyzer:
         by_number = {page.number: page for page in rendered_pages}
         findings = []
         for sig in scan.signatures:
+            crop_png, overview_jpeg = self._digital_images(path, sig, by_number)
             findings.append(
                 SignatureFinding(
                     kind=SignatureKind.DIGITAL,
                     page=sig.page or 1,
                     confidence=100,  # obecność w strukturze PDF jest pewna
-                    crop_png=self._digital_crop(path, sig, by_number),
+                    crop_png=crop_png,
+                    overview_jpeg=overview_jpeg,
                     detail=sig.detail,
                 )
             )
         return findings
 
-    def _digital_crop(
+    def _digital_images(
         self, path: Path, sig: DigitalSignature, rendered: dict[int, PageImage]
-    ) -> bytes | None:
-        """Wycinek widocznego widgetu podpisu cyfrowego (jeśli istnieje)."""
+    ) -> tuple[bytes | None, bytes | None]:
+        """Wycinek i miniatura widocznego widgetu podpisu cyfrowego (jeśli istnieje)."""
         if sig.page is None or sig.rect_pt is None:
-            return None
+            return None, None
         try:
             page = rendered.get(sig.page) or render_pdf_page(path, sig.page)
         except DocumentReadError:
-            return None
+            return None, None
         if page.page_size_pt is None:
-            return None
+            return None, None
         crop = crop_pdf_rect(page.image, sig.rect_pt, page.page_size_pt)
-        return to_png_bytes(crop) if crop is not None else None
+        overview = overview_pdf_rect(page.image, sig.rect_pt, page.page_size_pt)
+        return (
+            to_png_bytes(crop) if crop is not None else None,
+            to_jpeg_bytes(overview) if overview is not None else None,
+        )
 
 
 ProgressCallback = Callable[[int, int, Path], None]

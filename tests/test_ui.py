@@ -9,7 +9,7 @@ import pytest
 
 from signum.core.models import DocumentResult, DocumentStatus, SignatureFinding, SignatureKind
 from signum.ui.main_window import MainWindow
-from signum.ui.settings_dialog import SettingsDialog
+from signum.ui.settings_dialog import OnlineWarningDialog, SettingsDialog
 
 _PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGA"
@@ -101,6 +101,19 @@ class TestMainWindow:
         assert window._files == []
         assert window._left_stack.currentIndex() == 0
 
+    def test_plakietka_online_ukryta_dla_ollamy(self, window: MainWindow) -> None:
+        assert not window.online_badge.isVisibleTo(window)
+
+    def test_plakietka_online_widoczna_dla_chmury(self, qtbot, isolated_config) -> None:  # type: ignore[no-untyped-def]
+        from signum.config import AppConfig
+
+        config = AppConfig()
+        config.provider = "openai"
+        config.save()
+        win = MainWindow()
+        qtbot.addWidget(win)
+        assert win.online_badge.isVisibleTo(win)
+
 
 class TestSettingsDialog:
     def test_wczytuje_i_zbiera_konfiguracje(self, qtbot, isolated_config) -> None:  # type: ignore[no-untyped-def]
@@ -124,6 +137,44 @@ class TestSettingsDialog:
         dialog.provider_combo.setCurrentIndex(1)  # openai
         assert dialog.stack.currentIndex() == 1
         assert dialog._collect_config().provider == "openai"
+
+    def test_prompt_programu_domyslny_i_wlasny(self, qtbot, isolated_config) -> None:  # type: ignore[no-untyped-def]
+        from signum.ai.prompts import PROMPT_INSTRUCTIONS
+        from signum.config import AppConfig
+
+        dialog = SettingsDialog(AppConfig.load())
+        qtbot.addWidget(dialog)
+        assert dialog.prompt_edit.toPlainText() == PROMPT_INSTRUCTIONS
+        # Domyślna treść jest zapisywana jako pusta (= podążaj za aktualizacjami).
+        assert dialog._collect_config().custom_prompt == ""
+        dialog.prompt_edit.setPlainText("Szukaj też adnotacji przy słowie Podpis.")
+        assert (
+            dialog._collect_config().custom_prompt
+            == "Szukaj też adnotacji przy słowie Podpis."
+        )
+
+    def test_num_ctx_wczytanie_i_zapis(self, qtbot, isolated_config) -> None:  # type: ignore[no-untyped-def]
+        from signum.config import AppConfig
+
+        config = AppConfig.load()
+        config.ollama_num_ctx = 16384
+        dialog = SettingsDialog(config)
+        qtbot.addWidget(dialog)
+        assert dialog.ollama_num_ctx.value() == 16384
+        dialog.ollama_num_ctx.setValue(32768)
+        assert dialog._collect_config().ollama_num_ctx == 32768
+
+
+class TestOnlineWarningDialog:
+    def test_odliczanie_odblokowuje_przycisk(self, qtbot) -> None:  # type: ignore[no-untyped-def]
+        dialog = OnlineWarningDialog()
+        qtbot.addWidget(dialog)
+        assert not dialog.accept_button.isEnabled()
+        assert "(3)" in dialog.accept_button.text()
+        for _ in range(dialog.COUNTDOWN_S):
+            dialog._tick()
+        assert dialog.accept_button.isEnabled()
+        assert dialog.accept_button.text() == "Rozumiem zagrożenie"
 
 
 def _collect_labels(window: MainWindow) -> list[str]:

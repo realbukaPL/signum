@@ -18,7 +18,8 @@ Drop in up to a thousand scans and PDFs, click *Przetwórz* (Process), and Signu
   usage-rights signatures),
 - reports a **confidence score** for every detection,
 - shows a **cropped image of each signature** so a human can verify at a glance,
-- exports a self-contained **HTML report** (crops embedded) and **CSV**.
+- exports a self-contained **HTML report** (crops embedded, plus a page thumbnail
+  with the detection box marked for every finding) and **CSV**.
 
 > Signum detects the **presence** of signatures. It does not verify their cryptographic
 > validity or legal force.
@@ -67,6 +68,16 @@ config files. Settings live in `%APPDATA%\Signum\settings.json`.
 The vision model must support images. On this project's reference setup —
 [Gemma 4 12B](https://blog.google/innovation-and-ai/technology/developers-tools/introducing-gemma-4-12b/)
 via Ollama — a page takes ~8–30 s and bounding boxes land with IoU 0.6–0.9.
+Note: Ollama currently hard-codes Gemma 4's visual token budget to 280
+(≈0.65 Mpx per page — an A4 page is seen at ~672×912 px), so image sizes above
+1120 px mainly benefit cloud models. Because model-reported boxes are
+approximate by nature, the HTML report pairs every crop with a page thumbnail
+showing where the model pointed.
+
+Switching from Ollama to a cloud provider triggers a warning dialog (documents
+will leave your machine) with a 3-second hold on the confirm button, and a red
+**"Model online"** badge stays visible in the status bar while a cloud provider
+is active.
 
 ## Installation
 
@@ -113,8 +124,10 @@ signum-cli umowa.pdf skan.jpg --provider ollama --model gemma4:12b --max-pages 5
 | `provider` | `ollama` | `ollama` / `openai` / `anthropic` |
 | `ollama_url` | `http://localhost:11434` | Ollama endpoint |
 | `ollama_model` | `gemma4:12b` | must be a vision model |
+| `ollama_num_ctx` | `8192` | context window sent as `options.num_ctx` (Ollama's own default is only 4096) |
 | `max_pages_per_doc` | `10` | pages analyzed per document |
 | `model_image_max_side` | `1120` px | page image size sent to the model |
+| `custom_prompt` | `""` | user-edited task part of the prompt; empty = built-in (the JSON response format is always appended automatically) |
 | `timeout_s` | `300` | per-request AI timeout |
 | `recursive_folders` | `true` | recurse into subfolders |
 
@@ -122,7 +135,7 @@ signum-cli umowa.pdf skan.jpg --provider ollama --model gemma4:12b --max-pages 5
 
 ```powershell
 .venv\Scripts\pip install -e .[dev]
-.venv\Scripts\python -m pytest            # 80 tests, no network needed
+.venv\Scripts\python -m pytest            # 92 tests, no network needed
 .venv\Scripts\python -m ruff check src tests scripts
 .venv\Scripts\python -m mypy
 .venv\Scripts\python scripts\generate_fixtures.py   # example documents in examples/
@@ -162,7 +175,9 @@ a Polish user guide in [docs/INSTRUKCJA.pl.md](docs/INSTRUKCJA.pl.md).
 
 - With Ollama, documents are processed entirely locally.
 - With cloud providers, page images are sent to the provider's API — check your
-  organization's policy before use.
+  organization's policy before use. Signum makes this explicit: a countdown
+  warning when switching away from the local provider and a persistent
+  "Model online" badge in the status bar.
 - Visual detection is probabilistic: confidence scores and crops exist precisely so that
   a human can verify. Digital-signature detection is structural and exact, but Signum
   **does not** validate certificates, revocation or document integrity.

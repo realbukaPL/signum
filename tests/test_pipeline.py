@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from signum.ai.base import AIConnectionError, AIResponseError, VisionModel
+from signum.ai.prompts import PAGE_PROMPT
 from signum.core.models import DocumentStatus, SignatureKind
 from signum.core.pipeline import BatchResult, CancelToken, DocumentAnalyzer, run_batch
 from tests import docfactory
@@ -16,6 +17,7 @@ class FakeVisionModel(VisionModel):
 
     def __init__(self, response: dict | None = None, fail_with: Exception | None = None):
         self.calls = 0
+        self.last_prompt: str | None = None
         self._fail_with = fail_with
         self._response = response or {
             "description": "Umowa testowa",
@@ -30,6 +32,7 @@ class FakeVisionModel(VisionModel):
 
     def _generate(self, image_jpeg: bytes, prompt: str) -> str:
         self.calls += 1
+        self.last_prompt = prompt
         if self._fail_with is not None:
             raise self._fail_with
         return json.dumps(self._response)
@@ -59,6 +62,8 @@ class TestDocumentAnalyzer:
         assert finding.confidence == 92
         assert finding.crop_png is not None
         assert finding.crop_png.startswith(b"\x89PNG")
+        assert finding.overview_jpeg is not None  # miniatura strony z ramką
+        assert finding.overview_jpeg.startswith(b"\xff\xd8")
 
     def test_pdf_podpisany_cyfrowo_laczy_zrodla(
         self, tmp_path: Path, signed_pdf_bytes: bytes
@@ -72,6 +77,7 @@ class TestDocumentAnalyzer:
         assert kinds == [SignatureKind.DIGITAL]
         assert result.findings[0].confidence == 100
         assert result.findings[0].crop_png is not None  # widoczny widget podpisu
+        assert result.findings[0].overview_jpeg is not None
 
     def test_uszkodzony_plik_to_error_nie_wyjatek(self, tmp_path: Path) -> None:
         bad = tmp_path / "zepsuty.pdf"
@@ -90,6 +96,18 @@ class TestDocumentAnalyzer:
         model = FakeVisionModel(response={"description": "", "signatures": []})
         result = _analyzer(model).analyze(_scan_file(tmp_path), CancelToken())
         assert result.title == "skan"
+
+    def test_prompt_niestandardowy_i_domyslny(self, tmp_path: Path) -> None:
+        scan = _scan_file(tmp_path)
+        custom = FakeVisionModel(response={"description": "X", "signatures": []})
+        DocumentAnalyzer(
+            model=custom, max_pages=5, image_max_side=512, prompt="MÓJ PROMPT"
+        ).analyze(scan, CancelToken())
+        assert custom.last_prompt == "MÓJ PROMPT"
+
+        default = FakeVisionModel(response={"description": "X", "signatures": []})
+        _analyzer(default).analyze(scan, CancelToken())
+        assert default.last_prompt == PAGE_PROMPT
 
     def test_limit_stron(self, tmp_path: Path) -> None:
         pdf = tmp_path / "dlugi.pdf"

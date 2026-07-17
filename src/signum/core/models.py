@@ -51,6 +51,7 @@ class SignatureFinding:
     page: int  # numer strony, 1-bazowy
     confidence: int  # 0-100
     crop_png: bytes | None = None  # wycinek podpisu do weryfikacji przez człowieka
+    overview_jpeg: bytes | None = None  # miniatura strony z zaznaczonym znaleziskiem
     detail: str = ""  # np. rodzaj podpisu cyfrowego, podpisujący, data
 
 

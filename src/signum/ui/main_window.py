@@ -2,15 +2,25 @@
 
 from __future__ import annotations
 
+import math
 import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QAction, QColor, QDragEnterEvent, QDropEvent, QPixmap
+from PySide6.QtCore import QPointF, Qt, Signal
+from PySide6.QtGui import (
+    QAction,
+    QColor,
+    QDragEnterEvent,
+    QDropEvent,
+    QPainter,
+    QPen,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFrame,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -27,6 +37,7 @@ from PySide6.QtWidgets import (
 
 from signum import APP_DISPLAY_NAME, __version__
 from signum.ai import create_vision_model
+from signum.ai.prompts import build_page_prompt
 from signum.config import AppConfig, get_api_key
 from signum.core.discovery import collect_documents
 from signum.core.models import DocumentResult, DocumentStatus
@@ -161,8 +172,15 @@ class MainWindow(QMainWindow):
         self.progress.setMaximumWidth(320)
         self.progress.setVisible(False)
         self.status_label = QLabel("Gotowy")
+        self.online_badge = _OnlineBadge()
         self.statusBar().addWidget(self.status_label, 1)
+        self.statusBar().addPermanentWidget(self.online_badge)
         self.statusBar().addPermanentWidget(self.progress)
+        self._refresh_online_badge()
+
+    def _refresh_online_badge(self) -> None:
+        """Plakietka „model online" jest widoczna, gdy dostawca AI nie jest lokalny."""
+        self.online_badge.setVisible(self._config.provider != "ollama")
 
     # -- drag & drop ---------------------------------------------------------
 
@@ -231,6 +249,7 @@ class MainWindow(QMainWindow):
             model=model,
             max_pages=self._config.max_pages_per_doc,
             image_max_side=self._config.model_image_max_side,
+            prompt=build_page_prompt(self._config.custom_prompt),
         )
         self._results.clear()
         self._last_batch = None
@@ -292,6 +311,11 @@ class MainWindow(QMainWindow):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._config = AppConfig.load()
             self.status_label.setText("Zapisano ustawienia AI.")
+        else:
+            # Dialog mógł zmodyfikować obiekt konfiguracji (np. test połączenia)
+            # bez zapisu — wracamy do stanu z dysku.
+            self._config = AppConfig.load()
+        self._refresh_online_badge()
 
     def _on_export(self) -> None:
         if self._last_batch is None:
@@ -582,6 +606,63 @@ class _ClickableLabel(QLabel):
         )
         dialog.exec()
         super().mousePressEvent(event)
+
+
+class _OnlineBadge(QFrame):
+    """Plakietka ostrzegawcza: aktywny dostawca AI wysyła dane poza komputer."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setObjectName("onlineBadge")
+        self.setStyleSheet(
+            "#onlineBadge { border: 2px solid #c62828; border-radius: 6px;"
+            " background: #fff; }"
+            "#onlineBadge QLabel { color: #c62828; font-weight: 600; border: none; }"
+        )
+        row = QHBoxLayout(self)
+        row.setContentsMargins(8, 2, 8, 2)
+        row.setSpacing(6)
+        icon = QLabel()
+        icon.setPixmap(_transfer_arrows_pixmap())
+        row.addWidget(icon)
+        row.addWidget(QLabel("Model online"))
+        self.setToolTip(
+            "Aktywny dostawca AI działa w chmurze — analizowane dokumenty "
+            "są wysyłane przez internet poza ten komputer.\n"
+            "Aby pracować w pełni lokalnie, wybierz Ollamę w ustawieniach AI."
+        )
+
+
+def _transfer_arrows_pixmap(size: int = 18) -> QPixmap:
+    """Ikona wymiany danych: czerwona strzałka ↗ (wysyłka), niebieska ↙ (odbiór)."""
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    s = float(size)
+    _draw_arrow(painter, s * 0.25, s * 0.72, s * 0.90, s * 0.08, _RED)
+    _draw_arrow(painter, s * 0.75, s * 0.28, s * 0.10, s * 0.92, _BLUE)
+    painter.end()
+    return pixmap
+
+
+def _draw_arrow(
+    painter: QPainter, x0: float, y0: float, x1: float, y1: float, color: QColor
+) -> None:
+    pen = QPen(color, 2.0)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    painter.drawLine(QPointF(x0, y0), QPointF(x1, y1))
+    angle = math.atan2(y1 - y0, x1 - x0)
+    head = 5.0
+    for offset in (math.pi * 5 / 6, -math.pi * 5 / 6):  # grot: dwa skośne odcinki
+        painter.drawLine(
+            QPointF(x1, y1),
+            QPointF(
+                x1 + head * math.cos(angle + offset),
+                y1 + head * math.sin(angle + offset),
+            ),
+        )
 
 
 __all__ = ["MainWindow"]

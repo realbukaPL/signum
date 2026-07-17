@@ -42,12 +42,14 @@ class AppConfig:
     provider: str = "ollama"  # ollama | openai | anthropic
     ollama_url: str = "http://localhost:11434"
     ollama_model: str = "gemma4:12b"
+    ollama_num_ctx: int = 8192  # okno kontekstu (domyślne Ollamy to zaledwie 4096)
     openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-4o"
     anthropic_model: str = "claude-sonnet-5"
     timeout_s: int = 300
     max_pages_per_doc: int = 10
     model_image_max_side: int = 1120
+    custom_prompt: str = ""  # część merytoryczna promptu; pusta = domyślna
     recursive_folders: bool = True
     last_dir: str = ""
 

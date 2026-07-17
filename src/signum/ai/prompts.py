@@ -4,11 +4,16 @@ Prompt został dostrojony empirycznie na gemma4:12b (Ollama): konwencja
 ``box_2d = [ymin, xmin, ymax, xmax]`` w skali 0-1000 daje na tym modelu
 IoU ~0.6-0.9, a jawna lista negatywna (drukowany tekst, puste linie)
 eliminuje fałszywe pozytywy.
+
+Prompt składa się z dwóch części: merytorycznej (użytkownik może ją edytować
+w ustawieniach) oraz stałej końcówki z wymaganym formatem odpowiedzi — parser
+i structured outputs zależą od tego schematu, więc końcówki nie wolno
+pozostawiać w rękach użytkownika.
 """
 
 from __future__ import annotations
 
-PAGE_PROMPT = """Jesteś ekspertem analizy dokumentów. Otrzymujesz obraz JEDNEJ strony dokumentu.
+PROMPT_INSTRUCTIONS = """Jesteś ekspertem analizy dokumentów. Otrzymujesz obraz JEDNEJ strony dokumentu.
 
 Zadania:
 1. "description": bardzo krótki opis rodzaju dokumentu po polsku (2-6 słów), np. "Umowa o dzieło", "Faktura VAT", "Formularz świadomej zgody".
@@ -19,11 +24,23 @@ Wskazówki:
 - initials (parafka): bardzo krótki odręczny znak (inicjały, 1-3 znaki), często na marginesie lub przy poprawkach.
 - stamp (pieczątka): odbita pieczęć — okrągła lub prostokątna ramka z tekstem, często niebieska/fioletowa/czerwona.
 - NIE zgłaszaj drukowanego tekstu, logo, pustych linii ani pustych pól podpisu.
-- Jeśli strona nie zawiera żadnych podpisów ani pieczątek, zwróć pustą listę "signatures".
+- Jeśli strona nie zawiera żadnych podpisów ani pieczątek, zwróć pustą listę "signatures"."""
 
-Dla każdego znaleziska podaj "box_2d" = [ymin, xmin, ymax, xmax] w skali 0-1000 względem całej strony oraz "confidence" 0-100.
+PROMPT_FORMAT = """Dla każdego znaleziska podaj "box_2d" = [ymin, xmin, ymax, xmax] w skali 0-1000 względem całej strony oraz "confidence" 0-100.
 Odpowiedz WYŁĄCZNIE poprawnym JSON zgodnym ze schematem:
 {"description": "...", "signatures": [{"type": "handwritten|initials|stamp", "confidence": 0-100, "box_2d": [ymin, xmin, ymax, xmax]}]}"""
+
+
+def build_page_prompt(custom_instructions: str = "") -> str:
+    """Składa pełny prompt strony: część merytoryczna + stały format odpowiedzi.
+
+    Pusta wartość ``custom_instructions`` oznacza domyślną część merytoryczną.
+    """
+    instructions = custom_instructions.strip() or PROMPT_INSTRUCTIONS
+    return f"{instructions}\n\n{PROMPT_FORMAT}"
+
+
+PAGE_PROMPT = build_page_prompt()
 
 # Schemat JSON wymuszany przez structured outputs Ollamy; dla API chmurowych
 # służy jako dokumentacja formatu (wymuszamy promptem + odpornym parserem).

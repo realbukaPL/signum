@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from PIL import Image
 
-from signum.core.cropping import crop_box_2d, crop_pdf_rect, to_png_bytes
+from signum.core.cropping import (
+    crop_box_2d,
+    crop_pdf_rect,
+    overview_box_2d,
+    overview_pdf_rect,
+    to_jpeg_bytes,
+    to_png_bytes,
+)
 
 
 def _page(width: int = 1000, height: int = 1400) -> Image.Image:
@@ -49,3 +56,36 @@ def test_crop_pdf_rect_zla_strona_daje_none() -> None:
 def test_to_png_bytes_naglowek() -> None:
     data = to_png_bytes(_page(50, 50))
     assert data.startswith(b"\x89PNG")
+
+
+def test_overview_miniatura_z_ramka() -> None:
+    over = overview_box_2d(_page(), (500, 400, 600, 700))
+    assert over is not None
+    assert max(over.size) <= 480  # zmniejszona do miniatury
+    # czerwona ramka faktycznie narysowana na białej stronie
+    colors = over.getcolors(maxcolors=1_000_000)
+    assert colors is not None
+    assert any(color != (255, 255, 255) for _, color in colors)
+
+
+def test_overview_powstaje_takze_dla_odrzuconego_wycinka() -> None:
+    # Ramka na całą stronę: wycinek odrzucony (> MAX_AREA_FRACTION),
+    # ale miniatura ze wskazaniem nadal pokazuje, co model zaznaczył.
+    box = (0, 0, 1000, 1000)
+    assert crop_box_2d(_page(), box) is None
+    assert overview_box_2d(_page(), box) is not None
+
+
+def test_overview_zdegenerowana_ramka_daje_none() -> None:
+    assert overview_box_2d(_page(), (500, 400, 500, 400)) is None
+
+
+def test_overview_pdf_rect() -> None:
+    over = overview_pdf_rect(_page(1000, 1400), (100.0, 0.0, 300.0, 100.0), (500.0, 700.0))
+    assert over is not None
+    assert overview_pdf_rect(_page(), (0.0, 0.0, 10.0, 10.0), (0.0, 0.0)) is None
+
+
+def test_to_jpeg_bytes_naglowek() -> None:
+    data = to_jpeg_bytes(_page(50, 50))
+    assert data.startswith(b"\xff\xd8")

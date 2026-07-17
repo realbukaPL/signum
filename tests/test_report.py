@@ -7,6 +7,8 @@ import csv
 import io
 from pathlib import Path
 
+from PIL import Image
+
 from signum.core.models import DocumentResult, DocumentStatus, SignatureFinding, SignatureKind
 from signum.core.pipeline import BatchResult
 from signum.report import build_csv, build_html, write_csv
@@ -17,6 +19,15 @@ _PNG = base64.b64decode(
 )
 
 
+def _tiny_jpeg() -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (2, 2), "white").save(buf, format="JPEG")
+    return buf.getvalue()
+
+
+_JPEG = _tiny_jpeg()
+
+
 def _batch() -> BatchResult:
     signed = DocumentResult(
         path=Path("C:/docs/umowa.pdf"),
@@ -24,7 +35,11 @@ def _batch() -> BatchResult:
         title="Umowa o dzieło",
         findings=[
             SignatureFinding(
-                kind=SignatureKind.HANDWRITTEN, page=1, confidence=92, crop_png=_PNG
+                kind=SignatureKind.HANDWRITTEN,
+                page=1,
+                confidence=92,
+                crop_png=_PNG,
+                overview_jpeg=_JPEG,
             ),
             SignatureFinding(
                 kind=SignatureKind.DIGITAL,
@@ -73,6 +88,12 @@ class TestHtml:
         html = build_html(_batch())
         assert "data:image/png;base64," in html
         assert base64.b64encode(_PNG).decode("ascii") in html
+
+    def test_miniatura_strony_osadzona(self) -> None:
+        html = build_html(_batch())
+        assert "data:image/jpeg;base64," in html
+        assert base64.b64encode(_JPEG).decode("ascii") in html
+        assert "miniatura strony z zaznaczonym znaleziskiem" in html
 
     def test_html_escape(self) -> None:
         batch = _batch()

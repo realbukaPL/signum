@@ -11,6 +11,7 @@ from pathlib import Path
 
 from signum import __version__
 from signum.ai import create_vision_model
+from signum.ai.prompts import build_page_prompt
 from signum.config import AppConfig
 from signum.core.discovery import collect_documents
 from signum.core.models import DocumentResult, DocumentStatus
@@ -63,6 +64,7 @@ def main(argv: list[str] | None = None) -> int:
         model=model,
         max_pages=config.max_pages_per_doc,
         image_max_side=config.model_image_max_side,
+        prompt=build_page_prompt(config.custom_prompt),
     )
 
     def on_start(index: int, total: int, path: Path) -> None:

@@ -1,4 +1,4 @@
-# Buduje aplikację (PyInstaller) i instalator Windows (Inno Setup).
+﻿# Buduje aplikację (PyInstaller) i instalator Windows (Inno Setup).
 # Użycie (z katalogu głównego repozytorium):
 #   powershell -ExecutionPolicy Bypass -File scripts\build_installer.ps1
 

@@ -44,6 +44,7 @@ h1 { font-size: 1.5rem; } h2 { font-size: 1.1rem; margin: 0 0 .3rem; }
            padding: .6rem 0; }
 .finding img { max-height: 90px; max-width: 320px; border: 1px solid #ccc;
                border-radius: 4px; background: #fff; }
+.finding img.overview { max-height: 150px; max-width: 120px; }
 .meta { color: #444; font-size: .9rem; }
 footer { color: #888; font-size: .8rem; margin-top: 2rem; }
 """
@@ -112,10 +113,18 @@ def _document_html(result: DocumentResult) -> str:
             if finding.crop_png:
                 b64 = base64.b64encode(finding.crop_png).decode("ascii")
                 image_html = f"<img src='data:image/png;base64,{b64}' alt='wycinek podpisu'>"
+            overview_html = ""
+            if finding.overview_jpeg:
+                b64o = base64.b64encode(finding.overview_jpeg).decode("ascii")
+                overview_html = (
+                    f"<img class='overview' src='data:image/jpeg;base64,{b64o}' "
+                    "alt='miniatura strony z zaznaczonym znaleziskiem' "
+                    "title='Miejsce znaleziska na stronie'>"
+                )
             detail = f" — {html.escape(finding.detail)}" if finding.detail else ""
             parts.append(
                 "<div class='finding'>"
-                f"{image_html}"
+                f"{overview_html}{image_html}"
                 f"<div class='meta'><b>{html.escape(finding.kind.label_pl)}</b>, "
                 f"strona {finding.page}, pewność {finding.confidence}%{detail}</div>"
                 "</div>"
