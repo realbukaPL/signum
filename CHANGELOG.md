@@ -2,6 +2,17 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/), wersjonowanie: [SemVer](https://semver.org/).
 
+## [1.0.2] — 2026-07-20
+
+### Fixed
+- Ollama: znacząco lepszy recall detekcji — structured outputs (`format` =
+  schemat JSON) potrafił tłumić znaleziska (model zamykał listę po pieczątce
+  i gubił podpis odręczny obok niej). Pierwsze zapytanie idzie teraz bez
+  wymuszania schematu; `format` jest używany tylko jako jednorazowe ponowienie,
+  gdy odpowiedź nie zawiera poprawnego obiektu JSON. Zweryfikowane na
+  dokumencie z pieczątką i podpisem (wcześniej wykrywana tylko pieczątka)
+  oraz na przykładach z repo (bez nowych fałszywych pozytywów).
+
 ## [1.0.1] — 2026-07-17
 
 ### Added

@@ -52,7 +52,7 @@ Dwie niezależne ścieżki, łączone per dokument:
 
 | Ścieżka | Co wykrywa | Jak | Pewność |
 |---|---|---|---|
-| wizyjna | podpis odręczny, parafka, pieczątka | render strony → vision LLM → JSON (schemat wymuszany structured outputs Ollamy) | deklarowana przez model 0–100 |
+| wizyjna | podpis odręczny, parafka, pieczątka | render strony → vision LLM → JSON (schemat egzekwowany promptem + odpornym parserem; structured outputs tylko w ponowieniu) | deklarowana przez model 0–100 |
 | strukturalna (PDF) | podpisy cyfrowe: PAdES/CAdES, PKCS#7 (adbe), X.509, znaczniki czasu RFC 3161, podpisy certyfikujące DocMDP, UR3 | pypdf: pola `/FT /Sig` z `/V`, klasyfikacja po `/SubFilter` | 100 (fakt strukturalny) |
 
 Kluczowe decyzje:
@@ -74,8 +74,15 @@ Kluczowe decyzje:
   w ustawieniach, `PROMPT_INSTRUCTIONS`) i stały `PROMPT_FORMAT` z wymaganym
   schematem JSON, doklejany zawsze — parser i structured outputs zależą od
   schematu, więc nie wolno go oddać w ręce użytkownika.
-- **Parser odpowiedzi:** nawet ze structured outputs Ollama potrafi dokleić śmieci
-  po JSON-ie (zaobserwowane: `<|tool_response>` po poprawnym obiekcie) — parser
+- **Structured outputs tylko jako siatka bezpieczeństwa (od 1.0.2):** wymuszanie
+  schematu gramatyką (`format` w Ollamie) obniża recall — model potrafi
+  przedwcześnie zamknąć listę podpisów i zgubić podpis odręczny sąsiadujący
+  z pieczątką (zbadane na gemma4:12b, deterministyczne przy temp 0; kompresja
+  obrazu wykluczona jako przyczyna). Pierwsze zapytanie idzie więc bez `format`;
+  ponowienie z `format` następuje tylko wtedy, gdy odpowiedź nie zawiera
+  poprawnego obiektu JSON.
+- **Parser odpowiedzi:** model potrafi otoczyć JSON płotkami markdown albo
+  dokleić śmieci po obiekcie (zaobserwowane: `<|tool_response>`) — parser
   wycina pierwszy zbalansowany obiekt JSON z uwzględnieniem stringów i escape'ów.
   Błędne pojedyncze wpisy podpisów są pomijane, nie unieważniają strony.
 

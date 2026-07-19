@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import base64
+from typing import Any
 
 import requests
 
 from signum.ai.base import AIConnectionError, AIResponseError, VisionModel
+from signum.ai.parsing import extract_first_json_object
 from signum.ai.prompts import RESPONSE_SCHEMA
 
 DEFAULT_URL = "http://localhost:11434"
@@ -16,8 +18,12 @@ DEFAULT_NUM_CTX = 8192
 class OllamaVisionModel(VisionModel):
     """Model wizyjny serwowany przez Ollamę (np. ``gemma4:12b``).
 
-    Używa structured outputs (``format`` = schemat JSON), co znacząco
-    poprawia zgodność odpowiedzi ze schematem; resztę dosztywnia parser.
+    Pierwsze zapytanie idzie BEZ structured outputs: wymuszanie schematu
+    gramatyką (``format``) obniża recall detekcji — model potrafi zamknąć
+    listę podpisów przedwcześnie i zgubić np. podpis odręczny sąsiadujący
+    z pieczątką (zaobserwowane na gemma4:12b, temp 0, powtarzalne).
+    Dopiero gdy odpowiedź nie zawiera poprawnego obiektu JSON, ponawiamy
+    raz ze ``format`` jako siatką bezpieczeństwa dla zgodności ze schematem.
     """
 
     def __init__(
@@ -37,7 +43,15 @@ class OllamaVisionModel(VisionModel):
         return f"Ollama: {self._model}"
 
     def _generate(self, image_jpeg: bytes, prompt: str) -> str:
-        payload = {
+        content = self._chat(image_jpeg, prompt, structured=False)
+        try:
+            extract_first_json_object(content)
+        except AIResponseError:
+            content = self._chat(image_jpeg, prompt, structured=True)
+        return content
+
+    def _chat(self, image_jpeg: bytes, prompt: str, structured: bool) -> str:
+        payload: dict[str, Any] = {
             "model": self._model,
             "messages": [
                 {
@@ -47,9 +61,10 @@ class OllamaVisionModel(VisionModel):
                 }
             ],
             "stream": False,
-            "format": RESPONSE_SCHEMA,
             "options": {"temperature": 0, "num_ctx": self._num_ctx},
         }
+        if structured:
+            payload["format"] = RESPONSE_SCHEMA
         try:
             response = requests.post(
                 f"{self._base_url}/api/chat", json=payload, timeout=self._timeout_s

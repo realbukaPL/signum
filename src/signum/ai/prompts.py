@@ -42,8 +42,10 @@ def build_page_prompt(custom_instructions: str = "") -> str:
 
 PAGE_PROMPT = build_page_prompt()
 
-# Schemat JSON wymuszany przez structured outputs Ollamy; dla API chmurowych
-# służy jako dokumentacja formatu (wymuszamy promptem + odpornym parserem).
+# Schemat JSON dla structured outputs Ollamy — używany wyłącznie w ponowieniu,
+# gdy odpowiedź bez wymuszania nie zawiera obiektu JSON (wymuszanie gramatyką
+# obniża recall detekcji). Dla API chmurowych służy jako dokumentacja formatu
+# (wymuszamy promptem + odpornym parserem).
 RESPONSE_SCHEMA: dict = {
     "type": "object",
     "properties": {
