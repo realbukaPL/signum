@@ -49,7 +49,7 @@ pyinstaller==6.21.0
 pyinstaller-hooks-contrib==2026.6
 pyparsing==3.3.2
 pypdf==6.14.2
-pypdfium2==5.11.0
+pypdfium2==5.12.1
 PySide6==6.11.1
 PySide6_Addons==6.11.1
 PySide6_Essentials==6.11.1
