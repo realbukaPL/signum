@@ -12,7 +12,6 @@ from typing import Any
 
 import pytest
 
-from signum.ai import ollama_client
 from signum.ai.base import AIResponseError
 from signum.ai.ollama_client import OllamaVisionModel
 from signum.ai.prompts import RESPONSE_SCHEMA
@@ -20,9 +19,7 @@ from signum.ai.prompts import RESPONSE_SCHEMA
 VALID_JSON = json.dumps(
     {
         "description": "Umowa",
-        "signatures": [
-            {"type": "handwritten", "confidence": 95, "box_2d": [724, 694, 775, 810]}
-        ],
+        "signatures": [{"type": "handwritten", "confidence": 95, "box_2d": [724, 694, 775, 810]}],
     }
 )
 
@@ -44,7 +41,14 @@ class _FakePost:
         self._contents = list(contents)
         self.payloads: list[dict[str, Any]] = []
 
-    def __call__(self, url: str, json: dict[str, Any], timeout: int) -> _FakeResponse:
+    def __call__(
+        self,
+        url: str,
+        json: dict[str, Any],
+        timeout: int,
+        allow_redirects: bool,
+    ) -> _FakeResponse:
+        assert allow_redirects is False
         self.payloads.append(json)
         return _FakeResponse(self._contents[len(self.payloads) - 1])
 
@@ -54,12 +58,11 @@ def _model() -> OllamaVisionModel:
 
 
 class TestGenerateRetry:
-    def test_poprawny_json_bez_format_bez_ponowienia(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_poprawny_json_bez_format_bez_ponowienia(self, monkeypatch: pytest.MonkeyPatch) -> None:
         post = _FakePost(VALID_JSON)
-        monkeypatch.setattr(ollama_client.requests, "post", post)
-        analysis = _model().analyze_page(b"jpeg")
+        model = _model()
+        monkeypatch.setattr(model._session, "post", post)
+        analysis = model.analyze_page(b"jpeg")
         assert len(post.payloads) == 1
         assert "format" not in post.payloads[0]
         assert analysis.signatures[0].confidence == 95
@@ -68,17 +71,17 @@ class TestGenerateRetry:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         post = _FakePost(f"```json\n{VALID_JSON}\n```")
-        monkeypatch.setattr(ollama_client.requests, "post", post)
-        analysis = _model().analyze_page(b"jpeg")
+        model = _model()
+        monkeypatch.setattr(model._session, "post", post)
+        analysis = model.analyze_page(b"jpeg")
         assert len(post.payloads) == 1
         assert analysis.description == "Umowa"
 
-    def test_zly_json_ponawia_ze_structured_outputs(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_zly_json_ponawia_ze_structured_outputs(self, monkeypatch: pytest.MonkeyPatch) -> None:
         post = _FakePost("Przepraszam, nie mogę przeanalizować obrazu.", VALID_JSON)
-        monkeypatch.setattr(ollama_client.requests, "post", post)
-        analysis = _model().analyze_page(b"jpeg")
+        model = _model()
+        monkeypatch.setattr(model._session, "post", post)
+        analysis = model.analyze_page(b"jpeg")
         assert len(post.payloads) == 2
         assert "format" not in post.payloads[0]
         assert post.payloads[1]["format"] is RESPONSE_SCHEMA
@@ -88,7 +91,13 @@ class TestGenerateRetry:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         post = _FakePost("nie-json", "nadal nie-json")
-        monkeypatch.setattr(ollama_client.requests, "post", post)
+        model = _model()
+        monkeypatch.setattr(model._session, "post", post)
         with pytest.raises(AIResponseError):
-            _model().analyze_page(b"jpeg")
+            model.analyze_page(b"jpeg")
         assert len(post.payloads) == 2
+
+
+def test_lokalna_ollama_nie_uzywa_proxy_z_otoczenia() -> None:
+    assert _model()._session.trust_env is False
+    assert OllamaVisionModel("https://ollama.example.test", "model")._session.trust_env is True

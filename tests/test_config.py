@@ -49,6 +49,32 @@ def test_nieznany_provider_wraca_do_ollamy(isolated_config: Path) -> None:
     assert AppConfig.load().provider == "ollama"
 
 
+def test_niepoprawne_typy_i_zakresy_sa_sanitowane(isolated_config: Path) -> None:
+    isolated_config.parent.mkdir(parents=True, exist_ok=True)
+    isolated_config.write_text(
+        json.dumps(
+            {
+                "timeout_s": "bez limitu",
+                "max_pages_per_doc": 999_999,
+                "model_image_max_side": -1,
+                "recursive_folders": 1,
+                "last_dir": ["C:/prywatne"],
+                "ollama_model": "   ",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = AppConfig.load()
+
+    assert config.timeout_s == 300
+    assert config.max_pages_per_doc == 500
+    assert config.model_image_max_side == 1120
+    assert config.recursive_folders is True
+    assert config.last_dir == ""
+    assert config.ollama_model == "gemma4:12b"
+
+
 def test_klucze_api_nie_trafiaja_do_pliku(isolated_config: Path) -> None:
     config = AppConfig.load()
     config.save()

@@ -60,13 +60,12 @@ class AnthropicVisionModel(VisionModel):
                 json=payload,
                 headers=self._headers(),
                 timeout=self._timeout_s,
+                allow_redirects=False,
             )
         except requests.exceptions.RequestException as exc:
             raise AIConnectionError(f"Brak połączenia z Claude API: {exc}") from exc
         if response.status_code != 200:
-            raise AIResponseError(
-                f"Claude API zwróciło HTTP {response.status_code}: {response.text[:300]}"
-            )
+            raise AIResponseError(f"Claude API zwróciło HTTP {response.status_code}")
         try:
             blocks = response.json()["content"]
             texts = [block["text"] for block in blocks if block.get("type") == "text"]
@@ -79,7 +78,10 @@ class AnthropicVisionModel(VisionModel):
             raise AIResponseError("Nie podano klucza API")
         try:
             response = requests.get(
-                f"{API_URL}/models?limit=1", headers=self._headers(), timeout=15
+                f"{API_URL}/models?limit=1",
+                headers=self._headers(),
+                timeout=15,
+                allow_redirects=False,
             )
         except requests.exceptions.RequestException as exc:
             raise AIConnectionError(f"Brak połączenia z Claude API: {exc}") from exc

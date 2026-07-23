@@ -7,8 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from signum.ai import create_vision_model
 from signum.core.models import DocumentResult, DocumentStatus, SignatureFinding, SignatureKind
-from signum.ui.main_window import MainWindow
+from signum.ui.main_window import BatchRiskDialog, MainWindow
 from signum.ui.settings_dialog import OnlineWarningDialog, SettingsDialog
 
 _PNG = base64.b64decode(
@@ -114,6 +115,34 @@ class TestMainWindow:
         qtbot.addWidget(win)
         assert win.online_badge.isVisibleTo(win)
 
+    def test_plakietka_online_widoczna_dla_zdalnej_ollamy(self, qtbot, isolated_config) -> None:  # type: ignore[no-untyped-def]
+        from signum.config import AppConfig
+
+        config = AppConfig(ollama_url="https://ollama.example.test")
+        config.save()
+        win = MainWindow()
+        qtbot.addWidget(win)
+        assert win.online_badge.isVisibleTo(win)
+
+    def test_jedno_ostrzezenie_przed_cala_partia(
+        self, window: MainWindow, docs_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        window._add_documents([docs_dir])
+        calls = 0
+
+        def reject_risk() -> bool:
+            nonlocal calls
+            calls += 1
+            return False
+
+        monkeypatch.setattr(window, "_confirm_batch_risk", reject_risk)
+
+        window._start_batch(create_vision_model(window._config))
+
+        assert calls == 1
+        assert len(window._files) == 5
+        assert window._worker is None
+
 
 class TestSettingsDialog:
     def test_wczytuje_i_zbiera_konfiguracje(self, qtbot, isolated_config) -> None:  # type: ignore[no-untyped-def]
@@ -128,6 +157,7 @@ class TestSettingsDialog:
         dialog.max_pages.setValue(42)
         collected = dialog._collect_config()
         assert collected.max_pages_per_doc == 42
+        assert config.max_pages_per_doc != 42
 
     def test_zmiana_dostawcy_przelacza_strone(self, qtbot, isolated_config) -> None:  # type: ignore[no-untyped-def]
         from signum.config import AppConfig
@@ -148,10 +178,17 @@ class TestSettingsDialog:
         # Domyślna treść jest zapisywana jako pusta (= podążaj za aktualizacjami).
         assert dialog._collect_config().custom_prompt == ""
         dialog.prompt_edit.setPlainText("Szukaj też adnotacji przy słowie Podpis.")
-        assert (
-            dialog._collect_config().custom_prompt
-            == "Szukaj też adnotacji przy słowie Podpis."
-        )
+        assert dialog._collect_config().custom_prompt == "Szukaj też adnotacji przy słowie Podpis."
+
+    def test_zbyt_dlugi_prompt_jest_odrzucany(self, qtbot, isolated_config) -> None:  # type: ignore[no-untyped-def]
+        from signum.config import AppConfig
+
+        dialog = SettingsDialog(AppConfig.load())
+        qtbot.addWidget(dialog)
+        dialog.prompt_edit.setPlainText("x" * 20_001)
+
+        with pytest.raises(ValueError):
+            dialog._collect_config()
 
     def test_num_ctx_wczytanie_i_zapis(self, qtbot, isolated_config) -> None:  # type: ignore[no-untyped-def]
         from signum.config import AppConfig
@@ -177,11 +214,53 @@ class TestOnlineWarningDialog:
         assert dialog.accept_button.text() == "Rozumiem zagrożenie"
 
 
+class TestBatchRiskDialog:
+    def test_wymaga_wszystkich_trzech_potwierdzen(self, qtbot) -> None:  # type: ignore[no-untyped-def]
+        from signum.config import AppConfig
+
+        dialog = BatchRiskDialog(AppConfig(), 12)
+        qtbot.addWidget(dialog)
+
+        assert not dialog.accept_button.isEnabled()
+        assert "12 dokumentów" in _dialog_text(dialog)
+        assert "Tryb lokalny" in _dialog_text(dialog)
+
+        dialog.rights_ack.setChecked(True)
+        dialog.result_ack.setChecked(True)
+        assert not dialog.accept_button.isEnabled()
+        dialog.processing_ack.setChecked(True)
+        assert dialog.accept_button.isEnabled()
+
+    def test_tryb_online_ostrzega_o_wysylce(self, qtbot) -> None:  # type: ignore[no-untyped-def]
+        from signum.config import AppConfig
+
+        config = AppConfig(provider="openai")
+        dialog = BatchRiskDialog(config, 3)
+        qtbot.addWidget(dialog)
+
+        text = _dialog_text(dialog)
+        assert "Tryb online" in text
+        assert "zewnętrznego dostawcy AI" in text
+        assert "opuszczą komputer" in dialog.processing_ack.text()
+
+    def test_zdalna_ollama_jest_trybem_online(self, qtbot) -> None:  # type: ignore[no-untyped-def]
+        from signum.config import AppConfig
+
+        config = AppConfig(ollama_url="https://ollama.example.test")
+        dialog = BatchRiskDialog(config, 2)
+        qtbot.addWidget(dialog)
+
+        assert "Tryb zdalny" in _dialog_text(dialog)
+        assert "opuszczą komputer" in dialog.processing_ack.text()
+
+
 def _collect_labels(window: MainWindow) -> list[str]:
     from PySide6.QtWidgets import QLabel
 
-    return [
-        label.text()
-        for label in window.details_container.findChildren(QLabel)
-        if label.text()
-    ]
+    return [label.text() for label in window.details_container.findChildren(QLabel) if label.text()]
+
+
+def _dialog_text(dialog: BatchRiskDialog) -> str:
+    from PySide6.QtWidgets import QLabel
+
+    return " ".join(label.text() for label in dialog.findChildren(QLabel))

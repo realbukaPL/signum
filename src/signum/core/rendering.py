@@ -8,6 +8,8 @@ podpisów), a do modelu AI wysyłamy pomniejszoną kopię JPEG.
 from __future__ import annotations
 
 import io
+import math
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,10 +21,12 @@ from signum.core.discovery import PDF_EXTENSIONS
 RENDER_SCALE = 150 / 72  # rendering PDF w ~150 DPI
 MAX_WORKING_SIDE = 2400  # px — limit pamięci dla obrazu roboczego
 JPEG_QUALITY = 85
+MAX_INPUT_FILE_BYTES = 250 * 1024 * 1024
+MAX_IMAGE_PIXELS = 50_000_000
 
-# Duże skany bywają celowo ogromne; Pillow domyślnie blokuje > ~178 Mpx.
-# Podnosimy limit do 300 Mpx zamiast go wyłączać (ochrona przed decompression bomb).
-Image.MAX_IMAGE_PIXELS = 300_000_000
+# Ostrzeżenie Pillow zamieniamy niżej w błąd, zanim obraz zostanie w pełni
+# zdekompresowany. Limit 50 Mpx nadal obejmuje duże skany biurowe.
+Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
 
 
 class DocumentReadError(Exception):
@@ -54,6 +58,13 @@ def load_pages(path: Path, max_pages: int) -> tuple[list[PageImage], int]:
     uszkodzonych lub zabezpieczonych hasłem.
     """
     try:
+        size = path.stat().st_size
+        if size > MAX_INPUT_FILE_BYTES:
+            raise DocumentReadError(
+                f"Plik ma {size / (1024 * 1024):.1f} MB; limit bezpieczeństwa wynosi "
+                f"{MAX_INPUT_FILE_BYTES // (1024 * 1024)} MB"
+            )
+        max_pages = max(1, min(int(max_pages), 500))
         if is_pdf(path):
             return _load_pdf_pages(path, max_pages)
         return _load_image_pages(path, max_pages)
@@ -94,6 +105,13 @@ def _load_pdf_pages(path: Path, max_pages: int) -> tuple[list[PageImage], int]:
 def _render_page(pdf: pdfium.PdfDocument, page_number: int) -> PageImage:
     page = pdf[page_number - 1]
     width_pt, height_pt = page.get_size()
+    if (
+        not math.isfinite(width_pt)
+        or not math.isfinite(height_pt)
+        or width_pt <= 0
+        or height_pt <= 0
+    ):
+        raise DocumentReadError("PDF zawiera niepoprawny rozmiar strony")
     scale = RENDER_SCALE
     longest = max(width_pt, height_pt) * scale
     if longest > MAX_WORKING_SIDE:
@@ -105,15 +123,17 @@ def _render_page(pdf: pdfium.PdfDocument, page_number: int) -> PageImage:
 
 def _load_image_pages(path: Path, max_pages: int) -> tuple[list[PageImage], int]:
     pages: list[PageImage] = []
-    with Image.open(path) as im:
-        total = getattr(im, "n_frames", 1)
-        for frame in range(min(total, max_pages)):
-            if total > 1:
-                im.seek(frame)
-            frame_img = ImageOps.exif_transpose(im) or im
-            frame_img = frame_img.convert("RGB")
-            frame_img = _cap_size(frame_img)
-            pages.append(PageImage(number=frame + 1, image=frame_img))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", Image.DecompressionBombWarning)
+        with Image.open(path) as im:
+            total = getattr(im, "n_frames", 1)
+            for frame in range(min(total, max_pages)):
+                if total > 1:
+                    im.seek(frame)
+                frame_img = ImageOps.exif_transpose(im) or im
+                frame_img = frame_img.convert("RGB")
+                frame_img = _cap_size(frame_img)
+                pages.append(PageImage(number=frame + 1, image=frame_img))
     return pages, total
 
 

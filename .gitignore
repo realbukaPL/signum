@@ -6,6 +6,8 @@ env/
 # IDE
 .idea/
 .vscode/
+.claude/
+.agents/
 *.iml
 
 # Python
@@ -26,7 +28,28 @@ htmlcov/
 
 # PyInstaller / installer output
 installer/output/
+*.exe
+*.msi
+*.msix
 *.exe.manifest
+
+# Sekrety i lokalne poświadczenia
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Raporty użytkownika i pliki systemowe
+raport*.html
+raport*.csv
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.tmp
+*.bak
 
 # Local scratch
 scratch/

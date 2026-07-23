@@ -6,6 +6,8 @@ nigdy w pliku konfiguracyjnym.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -28,15 +30,26 @@ from PySide6.QtWidgets import (
 
 from signum.ai import create_vision_model
 from signum.ai.prompts import PROMPT_INSTRUCTIONS
-from signum.config import AppConfig, get_api_key, set_api_key
+from signum.config import (
+    MAX_CUSTOM_PROMPT_LENGTH,
+    AppConfig,
+    get_api_key,
+    set_api_key,
+)
+from signum.network import normalize_ai_endpoint, processing_is_local
 from signum.ui.worker import ConnectionTestWorker, ModelListWorker
 
 _PROVIDER_ORDER = ("ollama", "openai", "anthropic")
 _PROVIDER_LABELS = {
-    "ollama": "Ollama (model lokalny)",
+    "ollama": "Ollama (lokalna lub zdalna)",
     "openai": "OpenAI / API zgodne z OpenAI",
     "anthropic": "Claude (Anthropic)",
 }
+_OLLAMA_INSTALL_HELP = (
+    "Nie wykryto działającej Ollamy. Zainstaluj ją z "
+    '<a href="https://docs.ollama.com/windows">oficjalnej instrukcji dla Windows</a>, '
+    "uruchom usługę, wykonaj <code>ollama pull gemma4:12b</code> i odśwież listę."
+)
 
 
 class SettingsDialog(QDialog):
@@ -45,9 +58,10 @@ class SettingsDialog(QDialog):
     def __init__(self, config: AppConfig, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._config = config
-        self._initial_provider = config.provider  # do ostrzeżenia lokalny → online
+        self._initial_local = processing_is_local(config.provider, config.ollama_url)
         self._test_worker: ConnectionTestWorker | None = None
         self._models_worker: ModelListWorker | None = None
+        self._auto_refresh_started = False
         self.setWindowTitle("Ustawienia AI")
         self.setMinimumWidth(520)
         self._build_ui()
@@ -76,6 +90,7 @@ class SettingsDialog(QDialog):
         self.test_button = QPushButton("Testuj połączenie")
         self.test_button.clicked.connect(self._on_test_clicked)
         self.test_result = QLabel("")
+        self.test_result.setTextFormat(Qt.TextFormat.PlainText)
         self.test_result.setWordWrap(True)
         test_row.addWidget(self.test_button)
         test_row.addWidget(self.test_result, stretch=1)
@@ -103,14 +118,21 @@ class SettingsDialog(QDialog):
         model_row = QHBoxLayout()
         self.ollama_model = QComboBox()
         self.ollama_model.setEditable(True)
-        refresh = QPushButton("Odśwież listę")
-        refresh.clicked.connect(self._on_refresh_models)
+        self.refresh_models = QPushButton("Odśwież listę")
+        self.refresh_models.clicked.connect(self._on_refresh_models)
         model_row.addWidget(self.ollama_model, stretch=1)
-        model_row.addWidget(refresh)
+        model_row.addWidget(self.refresh_models)
         form.addRow("Model:", model_row)
-        form.addRow(
-            "", QLabel("Model musi obsługiwać obrazy (np. gemma4:12b, llava, qwen-vl).")
-        )
+        form.addRow("", QLabel("Model musi obsługiwać obrazy (np. gemma4:12b, llava, qwen-vl)."))
+        self.ollama_status = QLabel("")
+        self.ollama_status.setTextFormat(Qt.TextFormat.PlainText)
+        self.ollama_status.setWordWrap(True)
+        form.addRow("Stan usługi:", self.ollama_status)
+        self.ollama_install_help = QLabel(_OLLAMA_INSTALL_HELP)
+        self.ollama_install_help.setWordWrap(True)
+        self.ollama_install_help.setOpenExternalLinks(True)
+        self.ollama_install_help.setVisible(False)
+        form.addRow("", self.ollama_install_help)
 
         self.ollama_num_ctx = QSpinBox()
         self.ollama_num_ctx.setRange(2048, 262144)
@@ -219,9 +241,7 @@ class SettingsDialog(QDialog):
         toggle.setFixedWidth(60)
 
         def on_toggle(checked: bool) -> None:
-            edit.setEchoMode(
-                QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
-            )
+            edit.setEchoMode(QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password)
             toggle.setText("Ukryj" if checked else "Pokaż")
 
         toggle.toggled.connect(on_toggle)
@@ -252,11 +272,15 @@ class SettingsDialog(QDialog):
 
     def _collect_config(self) -> AppConfig:
         """Zbiera ustawienia z formularza (bez zapisywania)."""
-        cfg = self._config
+        cfg = replace(self._config)
         cfg.provider = self.provider_combo.currentData()
-        cfg.ollama_url = self.ollama_url.text().strip() or "http://localhost:11434"
+        cfg.ollama_url = normalize_ai_endpoint(
+            self.ollama_url.text(), "http://localhost:11434", "Ollamy"
+        )
         cfg.ollama_model = self.ollama_model.currentText().strip() or "gemma4:12b"
-        cfg.openai_base_url = self.openai_base_url.text().strip() or "https://api.openai.com/v1"
+        cfg.openai_base_url = normalize_ai_endpoint(
+            self.openai_base_url.text(), "https://api.openai.com/v1", "API OpenAI"
+        )
         cfg.openai_model = self.openai_model.text().strip() or "gpt-4o"
         cfg.anthropic_model = self.anthropic_model.text().strip() or "claude-sonnet-5"
         cfg.max_pages_per_doc = self.max_pages.value()
@@ -265,11 +289,13 @@ class SettingsDialog(QDialog):
         cfg.recursive_folders = self.recursive.isChecked()
         cfg.ollama_num_ctx = self.ollama_num_ctx.value()
         prompt_text = self.prompt_edit.toPlainText().strip()
+        if len(prompt_text) > MAX_CUSTOM_PROMPT_LENGTH:
+            raise ValueError(
+                f"Prompt programu może mieć najwyżej {MAX_CUSTOM_PROMPT_LENGTH} znaków."
+            )
         # Domyślną treść zapisujemy jako pustą — aktualizacja programu może
         # wtedy poprawić prompt bez ręcznej interwencji użytkownika.
-        cfg.custom_prompt = (
-            "" if prompt_text in ("", PROMPT_INSTRUCTIONS.strip()) else prompt_text
-        )
+        cfg.custom_prompt = "" if prompt_text in ("", PROMPT_INSTRUCTIONS.strip()) else prompt_text
         return cfg
 
     def _current_api_key(self) -> str:
@@ -287,14 +313,27 @@ class SettingsDialog(QDialog):
         self.test_result.setText("")
 
     def _on_refresh_models(self) -> None:
-        self.test_result.setText("Pobieranie listy modeli…")
-        self._models_worker = ModelListWorker(self.ollama_url.text().strip())
+        if self._models_worker is not None and self._models_worker.isRunning():
+            return
+        try:
+            url = normalize_ai_endpoint(self.ollama_url.text(), "http://localhost:11434", "Ollamy")
+        except ValueError as exc:
+            self.ollama_status.setText(str(exc))
+            self.ollama_install_help.setVisible(False)
+            return
+        self.refresh_models.setEnabled(False)
+        self.ollama_status.setText("Sprawdzanie Ollamy i listy modeli…")
+        self.ollama_install_help.setText(_OLLAMA_INSTALL_HELP)
+        self.ollama_install_help.setVisible(False)
+        self._models_worker = ModelListWorker(url, self)
         self._models_worker.finished_with_result.connect(self._on_models_loaded)
+        self._models_worker.finished.connect(self._on_models_worker_finished)
         self._models_worker.start()
 
     def _on_models_loaded(self, ok: bool, payload: object) -> None:
         if not ok:
-            self.test_result.setText(str(payload))
+            self.ollama_status.setText(str(payload))
+            self.ollama_install_help.setVisible(True)
             return
         models = list(payload)  # type: ignore[call-overload]
         current = self.ollama_model.currentText()
@@ -302,27 +341,58 @@ class SettingsDialog(QDialog):
         self.ollama_model.addItems(models)
         if current:
             self.ollama_model.setEditText(current)
-        self.test_result.setText(f"Znaleziono {len(models)} modeli.")
+        if models:
+            self.ollama_status.setText(f"Ollama działa — znaleziono {len(models)} modeli.")
+            self.ollama_install_help.setVisible(False)
+        else:
+            self.ollama_status.setText("Ollama działa, ale nie ma pobranego żadnego modelu.")
+            self.ollama_install_help.setText(
+                "Uruchom w PowerShell: <code>ollama pull gemma4:12b</code>, a potem odśwież listę."
+            )
+            self.ollama_install_help.setVisible(True)
+
+    def _on_models_worker_finished(self) -> None:
+        worker = self._models_worker
+        self._models_worker = None
+        self.refresh_models.setEnabled(True)
+        if worker is not None:
+            worker.deleteLater()
 
     def _on_test_clicked(self) -> None:
         self.test_button.setEnabled(False)
         self.test_result.setText("Łączenie…")
-        config = self._collect_config()
-        model = create_vision_model(config, api_key=self._current_api_key())
-        self._test_worker = ConnectionTestWorker(model)
+        try:
+            config = self._collect_config()
+            model = create_vision_model(config, api_key=self._current_api_key())
+        except ValueError as exc:
+            self.test_button.setEnabled(True)
+            self.test_result.setText(str(exc))
+            return
+        self._test_worker = ConnectionTestWorker(model, self)
         self._test_worker.finished_with_result.connect(self._on_test_finished)
+        self._test_worker.finished.connect(self._on_test_worker_finished)
         self._test_worker.start()
 
     def _on_test_finished(self, ok: bool, message: str) -> None:
-        self.test_button.setEnabled(True)
         prefix = "✔ " if ok else "✘ "
         self.test_result.setText(prefix + message)
         color = "#2e7d32" if ok else "#c62828"
         self.test_result.setStyleSheet(f"color: {color};")
 
+    def _on_test_worker_finished(self) -> None:
+        worker = self._test_worker
+        self._test_worker = None
+        self.test_button.setEnabled(True)
+        if worker is not None:
+            worker.deleteLater()
+
     def _on_save(self) -> None:
-        config = self._collect_config()
-        if self._initial_provider == "ollama" and config.provider != "ollama":
+        try:
+            config = self._collect_config()
+        except ValueError as exc:
+            QMessageBox.critical(self, "Niepoprawne ustawienia AI", str(exc))
+            return
+        if self._initial_local and not processing_is_local(config.provider, config.ollama_url):
             warning = OnlineWarningDialog(self)
             if warning.exec() != QDialog.DialogCode.Accepted:
                 return  # użytkownik nie potwierdził — dialog ustawień zostaje otwarty
@@ -334,17 +404,32 @@ class SettingsDialog(QDialog):
                 self,
                 "Magazyn poświadczeń",
                 "Nie udało się zapisać klucza API w magazynie poświadczeń systemu.\n"
-                "Klucz nie został zapisany — wprowadź go ponownie po restarcie.",
+                "Nie zapisano wszystkich kluczy. Sprawdź dostęp do magazynu i spróbuj ponownie.",
             )
+            return
         config.save()
         self.accept()
 
     # -- sprzątanie --------------------------------------------------------
 
+    def showEvent(self, event) -> None:  # type: ignore[no-untyped-def] # noqa: N802 — API Qt
+        super().showEvent(event)
+        if not self._auto_refresh_started and self.provider_combo.currentData() == "ollama":
+            self._auto_refresh_started = True
+            QTimer.singleShot(0, self._on_refresh_models)
+
     def closeEvent(self, event) -> None:  # type: ignore[no-untyped-def] # noqa: N802 — API Qt
-        for worker in (self._test_worker, self._models_worker):
-            if worker is not None and worker.isRunning():
-                worker.wait(100)
+        if any(
+            worker is not None and worker.isRunning()
+            for worker in (self._test_worker, self._models_worker)
+        ):
+            QMessageBox.information(
+                self,
+                "Trwa sprawdzanie połączenia",
+                "Zaczekaj na zakończenie bieżącego testu usługi AI, a następnie zamknij okno.",
+            )
+            event.ignore()
+            return
         super().closeEvent(event)
 
     def keyPressEvent(self, event) -> None:  # type: ignore[no-untyped-def] # noqa: N802 — API Qt
@@ -370,9 +455,10 @@ class OnlineWarningDialog(QDialog):
         layout = QVBoxLayout(self)
         message = QLabel(
             "<b>Dane opuszczą ten komputer.</b><br><br>"
-            "Wybrany dostawca AI działa w chmurze — każda analizowana strona "
-            "dokumentu będzie wysyłana przez internet na serwery zewnętrznej "
-            "firmy. Jeżeli dokumenty zawierają dane osobowe lub poufne, "
+            "Wybrana konfiguracja nie jest lokalna — każda analizowana strona "
+            "dokumentu będzie wysyłana przez sieć do zewnętrznej usługi AI "
+            "(dostawcy chmurowego albo zdalnej Ollamy). Jeżeli dokumenty zawierają "
+            "dane osobowe lub poufne, "
             "upewnij się, że masz do tego podstawę (np. zgodę administratora "
             "danych)."
         )

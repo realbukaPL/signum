@@ -24,8 +24,6 @@ Drop in up to a thousand scans and PDFs, click *Przetwórz* (Process), and Signu
 > Signum detects the **presence** of signatures. It does not verify their cryptographic
 > validity or legal force.
 
-![Main window](docs/screenshots/main_window.png)
-
 ## How it works
 
 ```mermaid
@@ -58,7 +56,7 @@ aborts it with a clear message.
 
 | Provider | Configuration | Notes |
 |---|---|---|
-| **Ollama** (default) | URL + model picked from the installed list | 100% local, documents never leave your machine. Tested with `gemma4:12b`. |
+| **Ollama** (default) | URL + model picked from the installed list | Local only for a loopback address (`localhost`, `127.0.0.1`, `::1`). A remote Ollama is treated as an online provider. Tested with `gemma4:12b`. |
 | **OpenAI-compatible API** | base URL + API key + model | Works with OpenAI, OpenRouter and any `/chat/completions`-compatible endpoint. |
 | **Claude (Anthropic)** | API key + model | Messages API with base64 image blocks. |
 
@@ -74,17 +72,28 @@ Note: Ollama currently hard-codes Gemma 4's visual token budget to 280
 approximate by nature, the HTML report pairs every crop with a page thumbnail
 showing where the model pointed.
 
-Switching from Ollama to a cloud provider triggers a warning dialog (documents
-will leave your machine) with a 3-second hold on the confirm button, and a red
-**"Model online"** badge stays visible in the status bar while a cloud provider
-is active.
+Switching from a local endpoint to any remote endpoint triggers a warning dialog
+(documents will leave your machine) with a 3-second hold on the confirm button,
+and a red **"Model online"** badge stays visible while the selected configuration
+is remote. Remote endpoints must use HTTPS. Starting a batch requires one explicit
+risk acknowledgement for the entire queue — Signum does not interrupt the user
+for every added document. Before that acknowledgement Signum performs a preflight
+which verifies that the selected service and model are actually available.
 
 ## Installation
 
 ### Installer (recommended)
 
 Download `Signum-Setup-<version>.exe` from Releases and run it. Per-user install,
-no administrator rights required. Polish and English installer languages.
+no administrator rights required. Polish and English installer languages. The
+installer contains the Python runtime and application libraries, so a separate
+Python installation is not required. It reports whether optional Ollama was found
+in its standard Windows locations; Ollama is needed only for local processing.
+The installer never downloads AI software or models automatically. The
+installer includes a separate document-and-AI risk page with four required
+acknowledgements covering human verification, authorization to process files,
+local AI processing, and transfer to an Internet provider. Silent installation
+requires `/ACKNOWLEDGERISKS=1`.
 
 ### From source
 
@@ -92,7 +101,8 @@ no administrator rights required. Polish and English installer languages.
 git clone <repository-url>
 cd signum
 python -m venv .venv
-.venv\Scripts\pip install -e .[dev]
+.venv\Scripts\python -m pip install --upgrade pip==26.1.2
+.venv\Scripts\pip install --build-constraint constraints.txt -c constraints.txt -e .[dev]
 .venv\Scripts\signum          # GUI
 ```
 
@@ -106,16 +116,18 @@ ollama pull gemma4:12b
 
 **GUI:** start Signum → (first run) *Ustawienia AI* → choose provider and model →
 drag & drop files/folders or use *Dodaj pliki…* / *Pracuj na folderze…* → *Przetwórz* →
-review results and signature crops → *Zapisz raport…* (HTML/CSV).
+confirm the single risk notice for the whole batch → review results and signature
+crops → *Zapisz raport…* (HTML/CSV).
 
 **CLI** (automation / batch jobs):
 
 ```powershell
-signum-cli C:\skany --html raport.html --csv raport.csv
-signum-cli umowa.pdf skan.jpg --provider ollama --model gemma4:12b --max-pages 5
+signum-cli C:\skany --html raport.html --csv raport.csv --acknowledge-risks
+signum-cli umowa.pdf skan.jpg --provider ollama --model gemma4:12b --max-pages 5 --acknowledge-risks
 ```
 
-![Report](docs/screenshots/report.png)
+Without `--acknowledge-risks`, CLI prints the complete risk notice and exits
+without connecting to an AI service or processing documents.
 
 ## Configuration
 
@@ -134,10 +146,11 @@ signum-cli umowa.pdf skan.jpg --provider ollama --model gemma4:12b --max-pages 5
 ## Development
 
 ```powershell
-.venv\Scripts\pip install -e .[dev]
-.venv\Scripts\python -m pytest            # 92 tests, no network needed
+.venv\Scripts\pip install --build-constraint constraints.txt -c constraints.txt -e .[dev]
+.venv\Scripts\python -m pytest            # no network needed
 .venv\Scripts\python -m ruff check src tests scripts
 .venv\Scripts\python -m mypy
+.venv\Scripts\pip-audit
 .venv\Scripts\python scripts\generate_fixtures.py   # example documents in examples/
 ```
 
@@ -152,6 +165,12 @@ Requires [Inno Setup 6](https://jrsoftware.org/isinfo.php).
 powershell -ExecutionPolicy Bypass -File scripts\build_installer.ps1
 # → installer\output\Signum-Setup-<version>.exe
 ```
+
+The build script runs a self-test of the packaged executable before invoking
+Inno Setup. This verifies the bundled Python runtime, required libraries and UI
+resources rather than merely checking that an `.exe` file exists. It also prints
+the SHA-256 digest and warns when the result lacks a valid Authenticode signature.
+Build outputs are ignored by Git; do not commit an installer to this repository.
 
 ### Project structure
 
@@ -173,7 +192,10 @@ a Polish user guide in [docs/INSTRUKCJA.pl.md](docs/INSTRUKCJA.pl.md).
 
 ## Privacy & limitations
 
-- With Ollama, documents are processed entirely locally.
+- With Ollama at a loopback address, documents are processed locally, but their
+  contents are still passed to an AI model. A LAN or Internet Ollama endpoint is
+  remote and is labelled as such. Local execution alone does not determine whether
+  the processing is authorized or appropriate.
 - With cloud providers, page images are sent to the provider's API — check your
   organization's policy before use. Signum makes this explicit: a countdown
   warning when switching away from the local provider and a persistent
@@ -181,6 +203,13 @@ a Polish user guide in [docs/INSTRUKCJA.pl.md](docs/INSTRUKCJA.pl.md).
 - Visual detection is probabilistic: confidence scores and crops exist precisely so that
   a human can verify. Digital-signature detection is structural and exact, but Signum
   **does not** validate certificates, revocation or document integrity.
+- The user is responsible for authorization to process the selected documents,
+  applicable organizational and confidentiality requirements, and verifying that
+  results are fit for the intended purpose. A Signum result must not be the sole
+  basis for a legal, business, or organizational decision.
+- HTML reports contain signature crops and page thumbnails derived from source
+  documents. CSV and HTML contain document file names, but never full local paths.
+  Treat exported reports as confidential and review them before sharing.
 - Encrypted PDFs that require a password are reported as errors (structure scan is skipped).
 
 ## License

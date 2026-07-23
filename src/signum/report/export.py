@@ -55,6 +55,8 @@ def build_html(batch: BatchResult) -> str:
     generated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     parts = [
         "<!DOCTYPE html><html lang='pl'><head><meta charset='utf-8'>",
+        "<meta http-equiv='Content-Security-Policy' "
+        "content=\"default-src 'none'; img-src data:; style-src 'unsafe-inline'\">",
         "<title>Signum — raport z analizy podpisów</title>",
         f"<style>{_CSS}</style></head><body>",
         "<h1>Signum — raport z analizy podpisów</h1>",
@@ -69,8 +71,13 @@ def build_html(batch: BatchResult) -> str:
     parts.append(
         f"<footer>Wygenerowano {generated} przez Signum {__version__}; "
         f"model: {html.escape(batch.model_name or '—')}. "
-        "Signum wykrywa obecność podpisów — nie weryfikuje ich ważności prawnej "
-        "ani kryptograficznej.</footer></body></html>"
+        "Signum wykorzystuje AI i może zwrócić wynik błędny lub niepełny. "
+        "Wykrywa oznaki obecności podpisów, ale nie potwierdza ich autentyczności, "
+        "ważności prawnej lub kryptograficznej ani integralności dokumentu. "
+        "Każdy wynik wymaga ręcznej weryfikacji w dokumencie źródłowym i nie "
+        "powinien być jedyną podstawą decyzji. Raport może zawierać poufne fragmenty "
+        "dokumentów i powinien być chroniony tak samo jak dokumenty źródłowe."
+        "</footer></body></html>"
     )
     return "".join(parts)
 
@@ -78,9 +85,7 @@ def build_html(batch: BatchResult) -> str:
 def _summary_html(batch: BatchResult) -> str:
     total = len(batch.results)
     ok = sum(1 for r in batch.results if r.status == DocumentStatus.OK)
-    unsigned = sum(
-        1 for r in batch.results if r.status == DocumentStatus.OK and not r.is_signed
-    )
+    unsigned = sum(1 for r in batch.results if r.status == DocumentStatus.OK and not r.is_signed)
     return (
         "<div class='summary'>"
         f"<div><b>{total}</b>plików</div>"
@@ -98,7 +103,7 @@ def _document_html(result: DocumentResult) -> str:
     parts = [
         "<div class='doc'>",
         f"<h2>{html.escape(result.title or result.path.name)} {badge}</h2>",
-        f"<div class='path'>{html.escape(str(result.path))}</div>",
+        f"<div class='path'>{html.escape(result.path.name)}</div>",
     ]
     if result.status == DocumentStatus.ERROR and result.error:
         parts.append(f"<p class='meta' style='color:#c62828'>{html.escape(result.error)}</p>")
@@ -167,8 +172,8 @@ def build_csv(batch: BatchResult) -> str:
     for r in batch.results:
         writer.writerow(
             [
-                str(r.path),
-                r.title,
+                _safe_csv_cell(r.path.name),
+                _safe_csv_cell(r.title),
                 _STATUS_LABELS[r.status],
                 "TAK" if r.is_signed else "NIE",
                 len(r.findings),
@@ -177,3 +182,12 @@ def build_csv(batch: BatchResult) -> str:
             ]
         )
     return buf.getvalue()
+
+
+def _safe_csv_cell(value: object) -> str:
+    """Neutralizuje tekst interpretowany przez arkusze jako formuła."""
+    text = str(value)
+    stripped = text.lstrip()
+    if text.startswith(("\t", "\r", "\n")) or stripped.startswith(("=", "+", "-", "@")):
+        return "'" + text
+    return text

@@ -10,6 +10,7 @@ import requests
 from signum.ai.base import AIConnectionError, AIResponseError, VisionModel
 from signum.ai.parsing import extract_first_json_object
 from signum.ai.prompts import RESPONSE_SCHEMA
+from signum.network import is_loopback_endpoint, normalize_ai_endpoint
 
 DEFAULT_URL = "http://localhost:11434"
 DEFAULT_NUM_CTX = 8192
@@ -33,7 +34,10 @@ class OllamaVisionModel(VisionModel):
         timeout_s: int = 300,
         num_ctx: int = DEFAULT_NUM_CTX,
     ) -> None:
-        self._base_url = (base_url or DEFAULT_URL).rstrip("/")
+        self._base_url = normalize_ai_endpoint(base_url, DEFAULT_URL, "Ollamy")
+        self._session = requests.Session()
+        # Lokalny endpoint nie może odziedziczyć proxy z otoczenia procesu.
+        self._session.trust_env = not is_loopback_endpoint(self._base_url)
         self._model = model
         self._timeout_s = timeout_s
         self._num_ctx = num_ctx
@@ -66,28 +70,35 @@ class OllamaVisionModel(VisionModel):
         if structured:
             payload["format"] = RESPONSE_SCHEMA
         try:
-            response = requests.post(
-                f"{self._base_url}/api/chat", json=payload, timeout=self._timeout_s
+            response = self._session.post(
+                f"{self._base_url}/api/chat",
+                json=payload,
+                timeout=self._timeout_s,
+                allow_redirects=False,
             )
         except requests.exceptions.RequestException as exc:
             raise AIConnectionError(
                 f"Brak połączenia z Ollamą pod {self._base_url}: {exc}"
             ) from exc
         if response.status_code != 200:
-            raise AIResponseError(
-                f"Ollama zwróciła HTTP {response.status_code}: {response.text[:300]}"
-            )
+            raise AIResponseError(f"Ollama zwróciła HTTP {response.status_code}")
         try:
             content = response.json()["message"]["content"]
-        except (ValueError, KeyError) as exc:
+        except (ValueError, KeyError, TypeError) as exc:
             raise AIResponseError(f"Niepoprawna odpowiedź Ollamy: {exc}") from exc
         return str(content)
 
     def check_connection(self) -> str:
         try:
-            version = requests.get(f"{self._base_url}/api/version", timeout=10).json()
+            version_response = self._session.get(
+                f"{self._base_url}/api/version", timeout=10, allow_redirects=False
+            )
+            version_response.raise_for_status()
+            version = version_response.json()
+            if not isinstance(version, dict):
+                raise ValueError("niepoprawna odpowiedź endpointu /api/version")
             models = self.list_models(self._base_url)
-        except requests.exceptions.RequestException as exc:
+        except (requests.exceptions.RequestException, ValueError) as exc:
             raise AIConnectionError(
                 f"Brak połączenia z Ollamą pod {self._base_url}: {exc}"
             ) from exc
@@ -102,14 +113,24 @@ class OllamaVisionModel(VisionModel):
     @staticmethod
     def list_models(base_url: str, timeout_s: int = 10) -> list[str]:
         """Lista modeli zainstalowanych w Ollamie (do rozwijanej listy w GUI)."""
-        url = (base_url or DEFAULT_URL).rstrip("/")
+        url = normalize_ai_endpoint(base_url, DEFAULT_URL, "Ollamy")
+        session = requests.Session()
+        session.trust_env = not is_loopback_endpoint(url)
         try:
-            response = requests.get(f"{url}/api/tags", timeout=timeout_s)
+            response = session.get(f"{url}/api/tags", timeout=timeout_s, allow_redirects=False)
             response.raise_for_status()
             data = response.json()
-        except requests.exceptions.RequestException as exc:
+        except (requests.exceptions.RequestException, ValueError) as exc:
             raise AIConnectionError(f"Brak połączenia z Ollamą pod {url}: {exc}") from exc
-        return sorted(model["name"] for model in data.get("models", []))
+        finally:
+            session.close()
+        if not isinstance(data, dict) or not isinstance(data.get("models", []), list):
+            raise AIResponseError("Ollama zwróciła niepoprawną listę modeli")
+        return sorted(
+            str(model["name"])
+            for model in data.get("models", [])
+            if isinstance(model, dict) and model.get("name")
+        )
 
 
 def _model_available(wanted: str, installed: list[str]) -> bool:

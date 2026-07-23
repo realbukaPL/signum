@@ -114,7 +114,7 @@ class DocumentAnalyzer:
             raise
         except (DocumentReadError, AIError, OSError) as exc:
             result.status = DocumentStatus.ERROR
-            result.error = str(exc)
+            result.error = _safe_document_error(exc, path)
         finally:
             result.duration_s = time.monotonic() - started
         return result
@@ -251,8 +251,7 @@ def run_batch(
                 DocumentResult(path=path, status=DocumentStatus.ERROR, error=str(exc))
             )
             batch.results.extend(
-                DocumentResult(path=p, status=DocumentStatus.CANCELLED)
-                for p in files[index + 1 :]
+                DocumentResult(path=p, status=DocumentStatus.CANCELLED) for p in files[index + 1 :]
             )
             break
         batch.results.append(result)
@@ -265,3 +264,11 @@ def run_batch(
 def _raise_if_cancelled(cancel: CancelToken) -> None:
     if cancel.cancelled:
         raise BatchCancelledError
+
+
+def _safe_document_error(exc: Exception, path: Path) -> str:
+    """Nie pozwala bibliotekom umieścić pełnej ścieżki dokumentu w raporcie."""
+    message = str(exc)
+    for variant in {str(path), path.as_posix()}:
+        message = message.replace(variant, path.name)
+    return message

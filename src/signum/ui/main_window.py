@@ -6,7 +6,7 @@ import math
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, Qt, Signal
+from PySide6.QtCore import QPointF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -17,7 +17,9 @@ from PySide6.QtGui import (
     QPixmap,
 )
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -36,15 +38,16 @@ from PySide6.QtWidgets import (
 )
 
 from signum import APP_DISPLAY_NAME, __version__
-from signum.ai import create_vision_model
+from signum.ai import VisionModel, create_vision_model
 from signum.ai.prompts import build_page_prompt
 from signum.config import AppConfig, get_api_key
 from signum.core.discovery import collect_documents
 from signum.core.models import DocumentResult, DocumentStatus
 from signum.core.pipeline import BatchResult, DocumentAnalyzer
+from signum.network import processing_is_local
 from signum.report import write_csv, write_html
 from signum.ui.settings_dialog import SettingsDialog
-from signum.ui.worker import BatchWorker
+from signum.ui.worker import BatchWorker, ConnectionTestWorker
 
 _COL_FILE, _COL_TITLE, _COL_SIGNATURES, _COL_CONFIDENCE, _COL_STATUS = range(5)
 
@@ -67,8 +70,11 @@ class MainWindow(QMainWindow):
         self._files: list[Path] = []
         self._results: dict[int, DocumentResult] = {}
         self._worker: BatchWorker | None = None
+        self._preflight_worker: ConnectionTestWorker | None = None
+        self._pending_model: VisionModel | None = None
         self._last_batch: BatchResult | None = None
         self._batch_started = 0.0
+        self._close_when_finished = False
 
         self.setWindowTitle(APP_DISPLAY_NAME)
         self.resize(1240, 800)
@@ -172,6 +178,7 @@ class MainWindow(QMainWindow):
         self.progress.setMaximumWidth(320)
         self.progress.setVisible(False)
         self.status_label = QLabel("Gotowy")
+        self.status_label.setTextFormat(Qt.TextFormat.PlainText)
         self.online_badge = _OnlineBadge()
         self.statusBar().addWidget(self.status_label, 1)
         self.statusBar().addPermanentWidget(self.online_badge)
@@ -180,18 +187,21 @@ class MainWindow(QMainWindow):
 
     def _refresh_online_badge(self) -> None:
         """Plakietka „model online" jest widoczna, gdy dostawca AI nie jest lokalny."""
-        self.online_badge.setVisible(self._config.provider != "ollama")
+        self.online_badge.setVisible(
+            not processing_is_local(self._config.provider, self._config.ollama_url)
+        )
 
     # -- drag & drop ---------------------------------------------------------
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # noqa: N802 — API Qt
-        if event.mimeData().hasUrls() and not self._is_processing():
+        if event.mimeData().hasUrls() and not self._is_busy():
             event.acceptProposedAction()
 
     def dropEvent(self, event: QDropEvent) -> None:  # noqa: N802 — API Qt
-        paths = [
-            Path(url.toLocalFile()) for url in event.mimeData().urls() if url.isLocalFile()
-        ]
+        if self._is_busy():
+            event.ignore()
+            return
+        paths = [Path(url.toLocalFile()) for url in event.mimeData().urls() if url.isLocalFile()]
         if paths:
             self._add_documents(paths)
 
@@ -214,6 +224,8 @@ class MainWindow(QMainWindow):
             self._add_documents([Path(folder)])
 
     def _add_documents(self, paths: list[Path]) -> None:
+        if self._is_busy():
+            return
         found = collect_documents(paths, recursive=self._config.recursive_folders)
         existing = set(self._files)
         new_files = [f for f in found if f not in existing]
@@ -236,7 +248,7 @@ class MainWindow(QMainWindow):
         self._update_action_states()
 
     def _on_process(self) -> None:
-        if self._is_processing() or not self._files:
+        if self._is_busy() or not self._files:
             return
         if not self._ensure_ai_ready():
             return
@@ -244,6 +256,18 @@ class MainWindow(QMainWindow):
             model = create_vision_model(self._config)
         except ValueError as exc:
             QMessageBox.critical(self, "Ustawienia AI", str(exc))
+            return
+        self._pending_model = model
+        self.status_label.setText("Sprawdzanie usługi AI i dostępności modelu…")
+        self._preflight_worker = ConnectionTestWorker(model, self)
+        self._preflight_worker.finished_with_result.connect(self._on_preflight_result)
+        self._preflight_worker.finished.connect(self._on_preflight_finished)
+        self._preflight_worker.start()
+        self._update_action_states()
+
+    def _start_batch(self, model: VisionModel) -> None:
+        if not self._confirm_batch_risk():
+            self.status_label.setText("Analiza nie została uruchomiona.")
             return
         analyzer = DocumentAnalyzer(
             model=model,
@@ -268,8 +292,48 @@ class MainWindow(QMainWindow):
         self._worker.file_started.connect(self._on_file_started)
         self._worker.file_done.connect(self._on_file_done)
         self._worker.batch_done.connect(self._on_batch_done)
+        self._worker.finished.connect(self._on_worker_finished)
         self._worker.start()
         self._update_action_states()
+
+    def _confirm_batch_risk(self) -> bool:
+        """Wymaga jednego potwierdzenia dla całej kolejki, nie dla każdego pliku."""
+        dialog = BatchRiskDialog(self._config, len(self._files), self)
+        return dialog.exec() == QDialog.DialogCode.Accepted
+
+    def _on_preflight_result(self, ok: bool, message: str) -> None:
+        if self._close_when_finished:
+            self._pending_model = None
+            return
+        if not ok:
+            if self._config.provider == "ollama":
+                detail = (
+                    f"{message}\n\nSignum zawiera własny runtime Pythona. "
+                    "Do pracy lokalnej potrzebna jest osobno uruchomiona Ollama oraz "
+                    f"pobrany model {self._config.ollama_model!r}. Otwórz Ustawienia AI, "
+                    "aby zobaczyć diagnostykę i instrukcję instalacji."
+                )
+            else:
+                detail = message
+            QMessageBox.critical(self, "Usługa AI niedostępna", detail)
+            self.status_label.setText("Usługa AI niedostępna — sprawdź ustawienia.")
+            self._pending_model = None
+            return
+        self.status_label.setText(message)
+        model = self._pending_model
+        self._pending_model = None
+        if model is not None:
+            self._start_batch(model)
+
+    def _on_preflight_finished(self) -> None:
+        worker = self._preflight_worker
+        self._preflight_worker = None
+        if worker is not None:
+            worker.deleteLater()
+        self._update_action_states()
+        if self._close_when_finished:
+            self._close_when_finished = False
+            QTimer.singleShot(0, self.close)
 
     def _ensure_ai_ready(self) -> bool:
         """Dla dostawców chmurowych wymagany jest klucz API."""
@@ -279,8 +343,7 @@ class MainWindow(QMainWindow):
             answer = QMessageBox.question(
                 self,
                 "Brak klucza API",
-                "Nie zapisano klucza API dla wybranego dostawcy.\n"
-                "Otworzyć ustawienia AI?",
+                "Nie zapisano klucza API dla wybranego dostawcy.\nOtworzyć ustawienia AI?",
             )
             if answer == QMessageBox.StandardButton.Yes:
                 self._on_settings()
@@ -294,7 +357,7 @@ class MainWindow(QMainWindow):
             self.act_cancel.setEnabled(False)
 
     def _on_clear(self) -> None:
-        if self._is_processing():
+        if self._is_busy():
             return
         self._files.clear()
         self._results.clear()
@@ -322,6 +385,16 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self, "Raport", "Najpierw przetwórz dokumenty — raport powstaje z wyników."
             )
+            return
+        answer = QMessageBox.question(
+            self,
+            "Poufność raportu",
+            "Raport zawiera nazwy dokumentów i informacje uzyskane z ich treści. "
+            "Raport HTML zawiera również wycinki podpisów i miniatury stron.\n\n"
+            "Przed przekazaniem raportu innej osobie sprawdź uprawnienia, poufność "
+            "oraz miejsce zapisu. Kontynuować?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
             return
         path_str, selected_filter = QFileDialog.getSaveFileName(
             self,
@@ -352,7 +425,8 @@ class MainWindow(QMainWindow):
             "w dokumentach PDF i skanach przy użyciu wizyjnych modeli AI "
             "(lokalnie przez Ollamę albo przez API chmurowe).<br><br>"
             "Program stwierdza wyłącznie <i>obecność</i> podpisów — nie weryfikuje "
-            "ich ważności prawnej ani kryptograficznej.",
+            "ich autentyczności, ważności prawnej ani kryptograficznej. Wyniki AI "
+            "mogą być błędne lub niepełne i wymagają ręcznej weryfikacji.",
         )
 
     # -- zdarzenia wątku roboczego --------------------------------------------
@@ -373,7 +447,6 @@ class MainWindow(QMainWindow):
 
     def _on_batch_done(self, batch: BatchResult) -> None:
         self._last_batch = batch
-        self._worker = None
         self.progress.setValue(self.progress.maximum())
         summary = (
             f"Zakończono: {len(batch.results)} plików w {batch.duration_s:.0f} s — "
@@ -385,13 +458,23 @@ class MainWindow(QMainWindow):
             if index not in self._results:
                 self._results[index] = result
                 self._fill_result_row(index, result)
-        if batch.abort_error:
+        if batch.abort_error and not self._close_when_finished:
             QMessageBox.critical(
                 self,
                 "Przetwarzanie przerwane",
                 f"Partia została przerwana z powodu błędu połączenia:\n\n{batch.abort_error}",
             )
         self._update_action_states()
+
+    def _on_worker_finished(self) -> None:
+        worker = self._worker
+        self._worker = None
+        if worker is not None:
+            worker.deleteLater()
+        self._update_action_states()
+        if self._close_when_finished:
+            self._close_when_finished = False
+            QTimer.singleShot(0, self.close)
 
     # -- pomocnicze ------------------------------------------------------------
 
@@ -444,16 +527,23 @@ class MainWindow(QMainWindow):
     def _is_processing(self) -> bool:
         return self._worker is not None and self._worker.isRunning()
 
+    def _is_preflighting(self) -> bool:
+        return self._preflight_worker is not None and self._preflight_worker.isRunning()
+
+    def _is_busy(self) -> bool:
+        return self._is_processing() or self._is_preflighting()
+
     def _update_action_states(self) -> None:
         processing = self._is_processing()
+        busy = processing or self._is_preflighting()
         has_files = bool(self._files)
-        self.act_add_files.setEnabled(not processing)
-        self.act_add_folder.setEnabled(not processing)
-        self.act_process.setEnabled(not processing and has_files)
+        self.act_add_files.setEnabled(not busy)
+        self.act_add_folder.setEnabled(not busy)
+        self.act_process.setEnabled(not busy and has_files)
         self.act_cancel.setEnabled(processing)
-        self.act_clear.setEnabled(not processing and has_files)
-        self.act_settings.setEnabled(not processing)
-        self.act_export.setEnabled(self._last_batch is not None)
+        self.act_clear.setEnabled(not busy and has_files)
+        self.act_settings.setEnabled(not busy)
+        self.act_export.setEnabled(not busy and self._last_batch is not None)
 
     def _remember_dir(self, directory: Path) -> None:
         self._config.last_dir = str(directory)
@@ -478,16 +568,24 @@ class MainWindow(QMainWindow):
 
     def _show_details(self, result: DocumentResult) -> None:
         self._clear_details()
-        title = QLabel(f"<h2>{result.title or result.path.name}</h2>")
+        title = QLabel(result.title or result.path.name)
+        title.setTextFormat(Qt.TextFormat.PlainText)
+        title_font = title.font()
+        title_font.setBold(True)
+        title_font.setPointSize(max(title_font.pointSize() + 3, 12))
+        title.setFont(title_font)
         title.setWordWrap(True)
         self.details_layout.addWidget(title)
-        path_label = QLabel(str(result.path))
+        path_label = QLabel(result.path.name)
+        path_label.setTextFormat(Qt.TextFormat.PlainText)
+        path_label.setToolTip(str(result.path))
         path_label.setWordWrap(True)
         path_label.setStyleSheet("color: #666; font-size: 11px;")
         self.details_layout.addWidget(path_label)
 
         if result.status == DocumentStatus.ERROR:
             error = QLabel(f"Błąd: {result.error}")
+            error.setTextFormat(Qt.TextFormat.PlainText)
             error.setWordWrap(True)
             error.setStyleSheet("color: #c62828;")
             self.details_layout.addWidget(error)
@@ -526,6 +624,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(caption)
         if finding.detail:
             detail = QLabel(finding.detail)
+            detail.setTextFormat(Qt.TextFormat.PlainText)
             detail.setWordWrap(True)
             detail.setStyleSheet("color: #444; font-size: 11px;")
             layout.addWidget(detail)
@@ -553,7 +652,25 @@ class MainWindow(QMainWindow):
     # -- zamknięcie okna -----------------------------------------------------------
 
     def closeEvent(self, event) -> None:  # type: ignore[no-untyped-def] # noqa: N802 — API Qt
+        if self._is_preflighting():
+            if self._close_when_finished:
+                event.ignore()
+                return
+            answer = QMessageBox.question(
+                self,
+                "Trwa sprawdzanie usługi AI",
+                "Poczekać na zakończenie sprawdzania i zamknąć program?",
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                self._close_when_finished = True
+                self.status_label.setText("Zamykanie po zakończeniu sprawdzania usługi AI…")
+                self.setEnabled(False)
+            event.ignore()
+            return
         if self._is_processing():
+            if self._close_when_finished:
+                event.ignore()
+                return
             answer = QMessageBox.question(
                 self,
                 "Trwa przetwarzanie",
@@ -564,8 +681,115 @@ class MainWindow(QMainWindow):
                 return
             if self._worker is not None:
                 self._worker.cancel()
-                self._worker.wait(10_000)
+                self._close_when_finished = True
+                self.status_label.setText(
+                    "Zamykanie po bezpiecznym zakończeniu bieżącego żądania AI…"
+                )
+                self.setEnabled(False)
+                event.ignore()
+                return
         event.accept()
+
+
+class BatchRiskDialog(QDialog):
+    """Jednorazowe potwierdzenie ryzyka przed analizą całej kolejki dokumentów."""
+
+    def __init__(self, config: AppConfig, file_count: int, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Przed uruchomieniem analizy")
+        self.setModal(True)
+        self.setMinimumWidth(640)
+
+        layout = QVBoxLayout(self)
+        heading = QLabel(f"<b>Do analizy wybrano {file_count} dokumentów.</b>")
+        layout.addWidget(heading)
+
+        limitations = QLabel(
+            "Signum wykorzystuje AI i może zwrócić wynik błędny lub niepełny. "
+            "Program wykrywa oznaki obecności podpisów, ale nie potwierdza "
+            "tożsamości osoby podpisującej, autentyczności podpisu, jego ważności "
+            "prawnej lub kryptograficznej ani integralności dokumentu. Każdy wynik "
+            "wymaga ręcznej weryfikacji w dokumencie źródłowym."
+        )
+        limitations.setWordWrap(True)
+        layout.addWidget(limitations)
+
+        is_local = processing_is_local(config.provider, config.ollama_url)
+        if is_local:
+            processing_text = (
+                "Tryb lokalny (Ollama): dokumenty nie są wysyłane do dostawcy "
+                "chmurowego, ale ich treść nadal trafia do modelu i jest "
+                "przetwarzana na tym komputerze. Lokalne uruchomienie nie przesądza, "
+                "czy takie użycie danych jest dozwolone."
+            )
+            processing_ack_text = (
+                "Rozumiem, że lokalny model AI otrzyma i przeanalizuje treść dokumentów."
+            )
+        elif config.provider == "ollama":
+            processing_text = (
+                "Tryb zdalny (Ollama): strony dokumentów zostaną wysłane przez sieć "
+                f"do usługi pod adresem {config.ollama_url}. Zdalna Ollama nie jest "
+                "przetwarzaniem lokalnym, nawet jeśli działa w sieci organizacji."
+            )
+            processing_ack_text = (
+                "Rozumiem, że dokumenty opuszczą komputer i trafią do zdalnej Ollamy."
+            )
+        else:
+            processing_text = (
+                "Tryb online: strony dokumentów zostaną wysłane przez internet do "
+                "zewnętrznego dostawcy AI i mogą być przetwarzane lub przechowywane "
+                "zgodnie z jego warunkami i zasadami prywatności."
+            )
+            processing_ack_text = (
+                "Rozumiem, że dokumenty opuszczą komputer i trafią do zewnętrznego dostawcy AI."
+            )
+
+        processing = QLabel(processing_text)
+        processing.setTextFormat(Qt.TextFormat.PlainText)
+        processing.setWordWrap(True)
+        processing.setStyleSheet(f"color: {'#555' if is_local else '#c62828'};")
+        layout.addWidget(processing)
+
+        responsibility = QLabel(
+            "Użytkownik odpowiada za sprawdzenie uprawnień do przetwarzania "
+            "dokumentów, zasad organizacji, wymagań poufności oraz przydatności "
+            "wyniku do danego celu."
+        )
+        responsibility.setWordWrap(True)
+        layout.addWidget(responsibility)
+
+        self.rights_ack = QCheckBox(
+            "Mam uprawnienia do przetwarzania wybranych dokumentów i sprawdziłem(-am) "
+            "zasady organizacji."
+        )
+        self.result_ack = QCheckBox("Rozumiem ograniczenia Signum i zweryfikuję wyniki ręcznie.")
+        self.processing_ack = QCheckBox(processing_ack_text)
+        self._acknowledgements = (
+            self.rights_ack,
+            self.result_ack,
+            self.processing_ack,
+        )
+        for checkbox in self._acknowledgements:
+            checkbox.setTristate(False)
+            checkbox.stateChanged.connect(self._update_accept_state)
+            layout.addWidget(checkbox)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        self.accept_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        self.accept_button.setText("Rozumiem — uruchom analizę")
+        self.accept_button.setEnabled(False)
+        cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        cancel_button.setDefault(True)
+        layout.addWidget(buttons)
+
+    def _update_accept_state(self) -> None:
+        self.accept_button.setEnabled(
+            all(checkbox.isChecked() for checkbox in self._acknowledgements)
+        )
 
 
 class _ClickableLabel(QLabel):
@@ -627,9 +851,10 @@ class _OnlineBadge(QFrame):
         row.addWidget(icon)
         row.addWidget(QLabel("Model online"))
         self.setToolTip(
-            "Aktywny dostawca AI działa w chmurze — analizowane dokumenty "
-            "są wysyłane przez internet poza ten komputer.\n"
-            "Aby pracować w pełni lokalnie, wybierz Ollamę w ustawieniach AI."
+            "Aktywna usługa AI nie działa na tym komputerze — analizowane dokumenty "
+            "są wysyłane przez sieć poza ten komputer.\n"
+            "Trybem lokalnym jest wyłącznie Ollama pod adresem pętli zwrotnej "
+            "tego komputera (np. http://127.0.0.1:11434)."
         )
 
 

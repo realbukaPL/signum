@@ -7,6 +7,7 @@ import csv
 import io
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from signum.core.models import DocumentResult, DocumentStatus, SignatureFinding, SignatureKind
@@ -102,10 +103,22 @@ class TestHtml:
         assert "<script>alert(1)</script>" not in html
         assert "&lt;script&gt;" in html
 
+    def test_raport_nie_ujawnia_pelnej_sciezki(self) -> None:
+        html = build_html(_batch())
+        assert "C:/docs" not in html
+        assert "umowa.pdf" in html
+        assert "Content-Security-Policy" in html
+
     def test_informacja_o_przerwaniu(self) -> None:
         batch = _batch()
         batch.abort_error = "Brak połączenia z Ollamą"
         assert "Brak połączenia z Ollamą" in build_html(batch)
+
+    def test_raport_przypomina_o_recznej_weryfikacji(self) -> None:
+        html = build_html(_batch())
+        assert "może zwrócić wynik błędny lub niepełny" in html
+        assert "wymaga ręcznej weryfikacji" in html
+        assert "nie potwierdza ich autentyczności" in html
 
 
 class TestCsv:
@@ -129,3 +142,10 @@ class TestCsv:
         assert signed_row[4] == "2"
         assert rows[2][3] == "NIE"
         assert rows[3][2] == "BŁĄD"
+
+    @pytest.mark.parametrize("prefix", ["=", "+", "-", "@", "\t", "\r"])
+    def test_neutralizuje_formuly_excela(self, prefix: str) -> None:
+        batch = _batch()
+        batch.results[0].title = prefix + "SUM(A1:A2)"
+        rows = list(csv.reader(io.StringIO(build_csv(batch)), delimiter=";"))
+        assert rows[1][1].startswith("'")

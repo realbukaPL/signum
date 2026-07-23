@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QObject, QThread, Signal
 
 from signum.ai.base import AIError, VisionModel
 from signum.ai.ollama_client import OllamaVisionModel
@@ -48,8 +48,8 @@ class ConnectionTestWorker(QThread):
 
     finished_with_result = Signal(bool, str)  # sukces, komunikat
 
-    def __init__(self, model: VisionModel) -> None:
-        super().__init__()
+    def __init__(self, model: VisionModel, parent: QObject | None = None) -> None:
+        super().__init__(parent)
         self._model = model
 
     def run(self) -> None:
@@ -68,8 +68,8 @@ class ModelListWorker(QThread):
 
     finished_with_result = Signal(bool, object)  # sukces, list[str] | komunikat błędu
 
-    def __init__(self, base_url: str) -> None:
-        super().__init__()
+    def __init__(self, base_url: str, parent: QObject | None = None) -> None:
+        super().__init__(parent)
         self._base_url = base_url
 
     def run(self) -> None:

@@ -1,0 +1,48 @@
+SIGNUM — INFORMACJA O RYZYKU DLA DOKUMENTÓW I AI
+
+Przeczytaj tę informację przed zainstalowaniem aplikacji.
+
+1. CEL I OGRANICZENIA PROGRAMU
+
+Signum jest narzędziem wspierającym wyszukiwanie oznak obecności podpisów,
+parafek i pieczątek w dokumentach. Wyniki analizy wizualnej są generowane przez
+model AI i mogą być błędne, niepełne lub mylące.
+
+Wykrycie podpisu nie potwierdza tożsamości osoby podpisującej, autentyczności
+podpisu, jego ważności prawnej lub kryptograficznej ani integralności dokumentu.
+Program nie sprawdza certyfikatów, ich unieważnienia ani pełnej poprawności
+podpisu cyfrowego. Każdy wynik wymaga niezależnej, ręcznej weryfikacji w
+dokumencie źródłowym i nie powinien być jedyną podstawą decyzji prawnej,
+biznesowej lub organizacyjnej.
+
+2. DOKUMENTY, UPRAWNIENIA I POUFNOŚĆ
+
+Dokumenty mogą zawierać dane osobowe, poufne, objęte tajemnicą lub inne dane
+wrażliwe. Signum nie potrafi ocenić, czy użytkownik może legalnie i bezpiecznie
+przetwarzać wybrane pliki. Przed analizą użytkownik musi ocenić wymagane
+uprawnienia, zasady organizacji, cel przetwarzania, minimalizację danych oraz
+zabezpieczenia. Użytkownik odpowiada także za ocenę przydatności wyniku do
+zamierzonego celu.
+
+3. PRZETWARZANIE PRZEZ LOKALNY MODEL AI
+
+Gdy Ollama i model AI działają na tym samym komputerze, dokumenty nie muszą być
+wysyłane do zewnętrznego dostawcy. Ich treść nadal jest przekazywana do modelu,
+analizowana i wykorzystywana do wygenerowania wyniku. Samo lokalne uruchomienie
+nie przesądza, czy takie przetwarzanie jest dozwolone.
+
+Pliki tymczasowe, pamięć podręczna, raporty, kopie zapasowe i inne
+oprogramowanie na komputerze mogą zachować lub ujawnić dane.
+
+4. PRZETWARZANIE PRZEZ ZDALNĄ USŁUGĘ AI
+
+Po wybraniu OpenAI, Anthropic, zdalnej Ollamy lub innej usługi sieciowej obrazy
+stron dokumentów opuszczają komputer i są przesyłane do zdalnej usługi. Dotyczy
+to również usługi w sieci organizacji. Dane mogą być tam przetwarzane lub
+przechowywane zgodnie z warunkami, zabezpieczeniami, zasadami prywatności i
+jurysdykcją operatora usługi.
+
+Instalator wymaga czterech osobnych potwierdzeń, aby powyższe ryzyka zostały
+zauważone przed kontynuowaniem instalacji. Potwierdzenia służą uświadomieniu
+ryzyka; nie są dodatkową umową, ograniczeniem licencji MIT ani obietnicą
+określonego sposobu korzystania z aplikacji.

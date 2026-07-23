@@ -8,7 +8,13 @@ from pathlib import Path
 from signum.ai.base import AIConnectionError, AIResponseError, VisionModel
 from signum.ai.prompts import PAGE_PROMPT
 from signum.core.models import DocumentStatus, SignatureKind
-from signum.core.pipeline import BatchResult, CancelToken, DocumentAnalyzer, run_batch
+from signum.core.pipeline import (
+    BatchResult,
+    CancelToken,
+    DocumentAnalyzer,
+    _safe_document_error,
+    run_batch,
+)
 from tests import docfactory
 
 
@@ -49,6 +55,14 @@ def _scan_file(tmp_path: Path) -> Path:
     path = tmp_path / "skan.png"
     docfactory.make_signed_scan().save(path)
     return path
+
+
+def test_komunikat_bledu_nie_ujawnia_pelnej_sciezki(tmp_path: Path) -> None:
+    path = tmp_path / "tajny.pdf"
+    message = _safe_document_error(OSError(f"nie można otworzyć {path}"), path)
+
+    assert str(tmp_path) not in message
+    assert path.name in message
 
 
 class TestDocumentAnalyzer:

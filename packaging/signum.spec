@@ -5,9 +5,44 @@ Budowanie (z katalogu głównego repozytorium):
     .venv\\Scripts\\pyinstaller packaging\\signum.spec --noconfirm
 """
 
+import re
 from pathlib import Path
 
 ROOT = Path(SPECPATH).parent  # katalog główny repozytorium
+version_source = (ROOT / "src" / "signum" / "__init__.py").read_text(encoding="utf-8")
+version_match = re.search(r'^__version__ = "(\d+)\.(\d+)\.(\d+)"$', version_source, re.M)
+if version_match is None:
+    raise ValueError("Nie znaleziono trzyczęściowej wersji Signum")
+app_version = ".".join(version_match.groups())
+version_tuple = tuple(map(int, version_match.groups())) + (0,)
+version_file = ROOT / "build" / "signum-version-info.txt"
+version_file.parent.mkdir(parents=True, exist_ok=True)
+version_file.write_text(
+    f"""VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers={version_tuple},
+    prodvers={version_tuple},
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)),
+  kids=[
+    StringFileInfo([
+      StringTable('040904B0', [
+        StringStruct('CompanyName', 'Signum contributors'),
+        StringStruct('FileDescription', 'Signum — document signature detection'),
+        StringStruct('FileVersion', '{app_version}'),
+        StringStruct('InternalName', 'Signum'),
+        StringStruct('LegalCopyright', 'Copyright (c) 2026 Signum contributors'),
+        StringStruct('OriginalFilename', 'Signum.exe'),
+        StringStruct('ProductName', 'Signum'),
+        StringStruct('ProductVersion', '{app_version}')])]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])])
+""",
+    encoding="utf-8",
+)
 
 a = Analysis(
     [str(ROOT / "src" / "signum" / "app.py")],
@@ -51,6 +86,7 @@ exe = EXE(
     upx=False,
     console=False,
     icon=str(ROOT / "src" / "signum" / "ui" / "resources" / "signum.ico"),
+    version=str(version_file),
 )
 
 coll = COLLECT(

@@ -101,8 +101,9 @@ Kluczowe decyzje:
 Jeden `BatchWorker(QThread)` wykonuje `run_batch` i emituje sygnały
 (`file_started`, `file_done`, `batch_done`); obiekty `DocumentResult` przechodzą
 przez granicę wątków jako payload sygnałów (Qt queued connections), pixmapy
-powstają dopiero w wątku GUI. Test połączenia i lista modeli w ustawieniach też
-mają własne krótkie wątki — GUI nigdy nie blokuje.
+powstają dopiero w wątku GUI. Test połączenia, preflight przed partią i lista
+modeli w ustawieniach też mają własne krótkie wątki — GUI nie blokuje na
+operacjach sieciowych.
 
 ## Configuration & secrets
 
@@ -110,6 +111,9 @@ mają własne krótkie wątki — GUI nigdy nie blokuje.
   (kompatybilność w przód), uszkodzony plik → domyślne.
 - Klucze API — wyłącznie Windows Credential Manager (`keyring`, service `Signum`).
   Test w suite pilnuje, że do JSON-a nie trafia nic z `key` w nazwie.
+- HTTP bez TLS jest dozwolone wyłącznie dla pętli zwrotnej. Zdalne endpointy
+  wymagają HTTPS i nie mogą używać przekierowań; lokalne połączenia nie
+  dziedziczą proxy z otoczenia procesu.
 
 ## Test strategy
 
@@ -125,6 +129,8 @@ mają własne krótkie wątki — GUI nigdy nie blokuje.
 
 ## Packaging
 
-PyInstaller (onedir, bez konsoli, wycięte nieużywane moduły Qt) → Inno Setup 6
-(per-user, PL/EN, stały AppId dla aktualizacji). Wersja płynie z jednego źródła:
+PyInstaller (onedir, bez konsoli, wycięte nieużywane moduły Qt) → test spakowanego
+runtime'u → Inno Setup 6 (per-user, PL/EN, stały AppId dla aktualizacji).
+Instalator zawiera Pythona i biblioteki, wykrywa opcjonalną Ollamę w standardowych
+lokalizacjach, a aplikacja sprawdza usługę i model przed każdą partią. Wersja płynie z jednego źródła:
 `signum.__version__` → hatchling (`pyproject`) → `build_installer.ps1` → ISCC.

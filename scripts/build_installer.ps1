@@ -18,6 +18,10 @@ if ($LASTEXITCODE -ne 0) { throw "PyInstaller zakończył się błędem" }
 Write-Host "[2/3] Test dymny zbudowanego exe..." -ForegroundColor Cyan
 $exe = Join-Path $root "dist\Signum\Signum.exe"
 if (-not (Test-Path $exe)) { throw "Brak $exe" }
+$smoke = Start-Process -FilePath $exe -ArgumentList "--self-test" -Wait -PassThru -WindowStyle Hidden
+if ($smoke.ExitCode -ne 0) {
+    throw "Test spakowanego runtime'u zakończył się kodem $($smoke.ExitCode)"
+}
 
 Write-Host "[3/3] Inno Setup..." -ForegroundColor Cyan
 $iscc = @(
@@ -32,3 +36,9 @@ if ($LASTEXITCODE -ne 0) { throw "ISCC zakończył się błędem" }
 
 $setup = Join-Path $root "installer\output\Signum-Setup-$version.exe"
 Write-Host "Gotowe: $setup" -ForegroundColor Green
+$hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash
+Write-Host "SHA-256: $hash" -ForegroundColor Green
+$signature = Get-AuthenticodeSignature -LiteralPath $setup
+if ($signature.Status -ne "Valid") {
+    Write-Warning "Instalator nie ma ważnego podpisu Authenticode. Nie publikuj go jako oficjalnego wydania bez podpisania certyfikatem wydawcy."
+}

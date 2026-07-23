@@ -80,6 +80,8 @@ class TestParsePageAnalysis:
             [0, 0, 1200, 500],  # poza skalą 0-1000
             [1, 2, 3],  # za mało współrzędnych
             "nie-lista",
+            ["NaN", 0, 10, 10],
+            [0, 0, "Infinity", 10],
             None,
         ],
     )
@@ -97,7 +99,16 @@ class TestParsePageAnalysis:
 
     @pytest.mark.parametrize(
         ("raw_conf", "expected"),
-        [(150, 100), (-5, 0), (0.87, 87), ("wysoka", 50), (None, 50), (63.4, 63)],
+        [
+            (150, 100),
+            (-5, 0),
+            (0.87, 87),
+            ("wysoka", 50),
+            ("NaN", 50),
+            ("Infinity", 50),
+            (None, 50),
+            (63.4, 63),
+        ],
     )
     def test_normalizacja_pewnosci(self, raw_conf: object, expected: int) -> None:
         import json
@@ -105,9 +116,7 @@ class TestParsePageAnalysis:
         raw = json.dumps(
             {
                 "description": "x",
-                "signatures": [
-                    {"type": "stamp", "confidence": raw_conf, "box_2d": [1, 1, 5, 5]}
-                ],
+                "signatures": [{"type": "stamp", "confidence": raw_conf, "box_2d": [1, 1, 5, 5]}],
             }
         )
         assert parse_page_analysis(raw).signatures[0].confidence == expected

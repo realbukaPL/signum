@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 KEYRING_SERVICE = APP_NAME
 PROVIDERS = ("ollama", "openai", "anthropic")
+MAX_MODEL_NAME_LENGTH = 200
+MAX_CUSTOM_PROMPT_LENGTH = 20_000
 
 
 def config_dir() -> Path:
@@ -64,19 +66,45 @@ class AppConfig:
         except (OSError, json.JSONDecodeError) as exc:
             logger.warning("Nie można wczytać %s (%s) — używam domyślnych", path, exc)
             return cls()
-        known = {f.name: f.type for f in fields(cls)}
-        kwargs = {k: v for k, v in raw.items() if k in known}
+        defaults = cls()
+        kwargs: dict[str, Any] = {}
+        for field in fields(cls):
+            if field.name not in raw:
+                continue
+            value = raw[field.name]
+            default = getattr(defaults, field.name)
+            # ``bool`` jest podklasą ``int``, dlatego typy sprawdzamy dokładnie.
+            if type(value) is type(default):
+                kwargs[field.name] = value
         config = cls(**kwargs)
         if config.provider not in PROVIDERS:
             config.provider = "ollama"
+        config.ollama_num_ctx = min(max(config.ollama_num_ctx, 2048), 262_144)
+        config.timeout_s = min(max(config.timeout_s, 30), 3600)
+        config.max_pages_per_doc = min(max(config.max_pages_per_doc, 1), 500)
+        if config.model_image_max_side not in {768, 1024, 1120, 1400, 1600, 2048}:
+            config.model_image_max_side = defaults.model_image_max_side
+        if not config.ollama_model.strip():
+            config.ollama_model = defaults.ollama_model
+        if not config.openai_model.strip():
+            config.openai_model = defaults.openai_model
+        if not config.anthropic_model.strip():
+            config.anthropic_model = defaults.anthropic_model
+        config.ollama_model = config.ollama_model[:MAX_MODEL_NAME_LENGTH]
+        config.openai_model = config.openai_model[:MAX_MODEL_NAME_LENGTH]
+        config.anthropic_model = config.anthropic_model[:MAX_MODEL_NAME_LENGTH]
+        config.custom_prompt = config.custom_prompt[:MAX_CUSTOM_PROMPT_LENGTH]
+        config.last_dir = config.last_dir[:32_767]
         return config
 
     def save(self) -> None:
         path = config_file()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(
             json.dumps(asdict(self), indent=2, ensure_ascii=False), encoding="utf-8"
         )
+        temporary.replace(path)
 
 
 def get_api_key(provider: str) -> str | None:

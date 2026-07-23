@@ -2,6 +2,44 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/), wersjonowanie: [SemVer](https://semver.org/).
 
+## [1.0.4] — 2026-07-22
+
+### Added
+- Diagnostyka Ollamy w ustawieniach oraz asynchroniczny preflight usługi i modelu
+  przed uruchomieniem każdej partii; instalator wyjaśnia, że Python jest wbudowany,
+  a Ollama jest opcjonalnym, osobno instalowanym składnikiem.
+- Jawne potwierdzenie ryzyka w CLI (`--acknowledge-risks`) i ostrzeżenie o
+  poufności przed eksportem raportu.
+- Audyt zależności w CI, przypięte wersje zależności i akcji oraz Dependabot.
+
+### Security
+- Zdalne endpointy wymagają HTTPS, przekierowania HTTP są wyłączone, a Ollama
+  na pętli zwrotnej nie dziedziczy proxy z otoczenia procesu.
+- Raporty nie zawierają pełnych ścieżek; komórki CSV są chronione przed formula
+  injection, a raport HTML ma restrykcyjną politykę CSP.
+- Limity rozmiaru pliku, liczby pikseli, stron i złożoności hierarchii pól PDF
+  ograniczają ryzyko wyczerpania pamięci lub czasu przez złośliwy dokument.
+- Konfiguracja jest walidowana i zapisywana atomowo; treści pochodzące z modelu
+  i dokumentu są wyświetlane w GUI jako tekst jawny.
+
+### Changed
+- Metadane autora zastąpiono neutralnym `Signum contributors`; pozostawiono
+  wyłącznie wskazany wyjątek wydawcy w instalatorze.
+- Usunięto screenshoty zawierające lokalne ścieżki i rozszerzono reguły ignorowania
+  sekretów, artefaktów instalatora oraz lokalnych ustawień narzędzi.
+
+## [1.0.3] — 2026-07-22
+
+### Added
+- Instalator: osobny polsko- i anglojęzyczny ekran świadomości ryzyka z czterema
+  wymaganymi potwierdzeniami; instalacja cicha wymaga `/ACKNOWLEDGERISKS=1`.
+- GUI: jedno ostrzeżenie przed uruchomieniem całej partii dokumentów, obejmujące
+  uprawnienia do przetwarzania, sposób pracy modelu i ręczną weryfikację wyników.
+
+### Changed
+- Raport HTML i okno „O programie" wyraźniej opisują ograniczenia wyniku oraz
+  obowiązek niezależnej weryfikacji.
+
 ## [1.0.2] — 2026-07-20
 
 ### Fixed

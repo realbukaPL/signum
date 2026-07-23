@@ -10,6 +10,7 @@ unieważnia całej strony.
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 from signum.ai.base import AIResponseError, PageAnalysis, VisualSignature
@@ -100,6 +101,8 @@ def _clamp_confidence(value: Any) -> int:
         number = float(value)
     except (TypeError, ValueError):
         return 50  # model nie podał pewności — wartość neutralna
+    if not math.isfinite(number):
+        return 50
     if 0 < number <= 1:  # model podał ułamek zamiast procentów
         number *= 100
     return max(0, min(100, round(number)))
@@ -109,9 +112,12 @@ def _parse_box(value: Any) -> tuple[int, int, int, int] | None:
     if not isinstance(value, (list, tuple)) or len(value) != 4:
         return None
     try:
-        ymin, xmin, ymax, xmax = (round(float(v)) for v in value)
+        numbers = tuple(float(v) for v in value)
     except (TypeError, ValueError):
         return None
+    if any(not math.isfinite(number) for number in numbers):
+        return None
+    ymin, xmin, ymax, xmax = (round(number) for number in numbers)
     coords = (ymin, xmin, ymax, xmax)
     if any(not 0 <= c <= BOX_SCALE for c in coords):
         return None

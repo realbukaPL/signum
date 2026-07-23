@@ -10,12 +10,13 @@ import sys
 from pathlib import Path
 
 from signum import __version__
-from signum.ai import create_vision_model
+from signum.ai import AIError, create_vision_model
 from signum.ai.prompts import build_page_prompt
 from signum.config import AppConfig
 from signum.core.discovery import collect_documents
 from signum.core.models import DocumentResult, DocumentStatus
 from signum.core.pipeline import BatchResult, CancelToken, DocumentAnalyzer, run_batch
+from signum.network import processing_is_local
 from signum.report import write_csv, write_html
 
 
@@ -31,7 +32,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--csv", type=Path, metavar="PLIK", help="zapisz raport CSV")
     parser.add_argument("--provider", choices=("ollama", "openai", "anthropic"))
     parser.add_argument("--model", help="nazwa modelu (nadpisuje ustawienia)")
-    parser.add_argument("--max-pages", type=int, metavar="N", help="limit stron na dokument")
+    parser.add_argument(
+        "--max-pages", type=_positive_int, metavar="N", help="limit stron na dokument"
+    )
+    parser.add_argument(
+        "--acknowledge-risks",
+        action="store_true",
+        help="potwierdź uprawnienia, sposób przetwarzania i obowiązek weryfikacji",
+    )
     parser.add_argument("--version", action="version", version=f"signum {__version__}")
     return parser
 
@@ -48,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
             config.openai_model = args.model
         else:
             config.anthropic_model = args.model
-    if args.max_pages:
+    if args.max_pages is not None:
         config.max_pages_per_doc = args.max_pages
 
     files = collect_documents(args.paths, recursive=not args.no_recursive)
@@ -56,8 +64,28 @@ def main(argv: list[str] | None = None) -> int:
         print("Nie znaleziono obsługiwanych dokumentów (PDF/JPG/PNG/TIFF/BMP/WEBP).")
         return 2
 
-    model = create_vision_model(config)
+    if not args.acknowledge_risks:
+        _print_risk_notice(config, len(files))
+        print(
+            "Aby uruchomić analizę, ponów polecenie z --acknowledge-risks.",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        model = create_vision_model(config)
+        connection = model.check_connection()
+    except (AIError, ValueError) as exc:
+        print(f"Usługa AI niedostępna: {exc}", file=sys.stderr)
+        if config.provider == "ollama":
+            print(
+                "Wersja instalowana zawiera Pythona, ale lokalny tryb wymaga "
+                "uruchomionej Ollamy i pobranego modelu.",
+                file=sys.stderr,
+            )
+        return 2
     print(f"Model: {model.name}")
+    print(f"Połączenie: {connection}")
     print(f"Plików do analizy: {len(files)}\n")
 
     analyzer = DocumentAnalyzer(
@@ -104,6 +132,31 @@ def _print_summary(batch: BatchResult) -> None:
     )
     if batch.abort_error:
         print(f"PARTIĘ PRZERWANO: {batch.abort_error}")
+
+
+def _print_risk_notice(config: AppConfig, file_count: int) -> None:
+    local = processing_is_local(config.provider, config.ollama_url)
+    transport = (
+        "lokalny model Ollama pod adresem loopback"
+        if local
+        else "zewnętrzna usługa AI; obrazy stron opuszczą komputer"
+    )
+    print("OSTRZEŻENIE PRZED ANALIZĄ", file=sys.stderr)
+    print(f"- Liczba dokumentów: {file_count}.", file=sys.stderr)
+    print(f"- Sposób przetwarzania: {transport}.", file=sys.stderr)
+    print("- Musisz mieć prawo do przetwarzania dokumentów.", file=sys.stderr)
+    print("- Wyniki AI mogą być błędne i wymagają ręcznej weryfikacji.", file=sys.stderr)
+    print(
+        "- Raporty zawierają nazwy i dane z dokumentów; HTML osadza również obrazy.",
+        file=sys.stderr,
+    )
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if not 1 <= parsed <= 500:
+        raise argparse.ArgumentTypeError("wartość musi mieścić się w zakresie 1–500")
+    return parsed
 
 
 if __name__ == "__main__":

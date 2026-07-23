@@ -11,6 +11,7 @@ podpisów — sprawdzamy wyłącznie ich obecność.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -26,6 +27,10 @@ _SUBFILTER_LABELS = {
     "/adbe.x509.rsa_sha1": "X.509 RSA-SHA1 (adbe.x509.rsa_sha1)",
     "/ETSI.RFC3161": "znacznik czasu (ETSI.RFC3161)",
 }
+MAX_FIELD_DEPTH = 64
+MAX_FIELD_OBJECTS = 5000
+MAX_WIDGET_SCAN_PAGES = 10_000
+MAX_PDF_TEXT_LENGTH = 1000
 
 
 @dataclass(slots=True)
@@ -64,6 +69,13 @@ class DigitalScanResult:
     notes: list[str] = field(default_factory=list)  # np. formularz XFA, szyfrowanie
 
 
+@dataclass(slots=True)
+class _WalkState:
+    visited_refs: set[tuple[int, int]] = field(default_factory=set)
+    object_count: int = 0
+    limit_reported: bool = False
+
+
 def scan_digital_signatures(path: Path) -> DigitalScanResult:
     """Skanuje PDF pod kątem podpisów cyfrowych.
 
@@ -95,8 +107,16 @@ def _scan_reader(reader: PdfReader, result: DigitalScanResult) -> None:
             result.notes.append("dokument zawiera formularz XFA")
         fields = _resolve(acro_form.get("/Fields"))
         if isinstance(fields, ArrayObject):
+            state = _WalkState()
             for field_ref in fields:
-                _walk_field(field_ref, parent_name="", reader=reader, result=result)
+                _walk_field(
+                    field_ref,
+                    parent_name="",
+                    reader=reader,
+                    result=result,
+                    state=state,
+                    depth=0,
+                )
 
     # Podpis praw użycia (usage rights, np. Adobe Reader Extensions).
     perms = _resolve(root.get("/Perms"))
@@ -107,25 +127,43 @@ def _scan_reader(reader: PdfReader, result: DigitalScanResult) -> None:
 
 
 def _walk_field(
-    field_ref: Any, parent_name: str, reader: PdfReader, result: DigitalScanResult
+    field_ref: Any,
+    parent_name: str,
+    reader: PdfReader,
+    result: DigitalScanResult,
+    state: _WalkState,
+    depth: int,
 ) -> None:
+    if depth > MAX_FIELD_DEPTH or state.object_count >= MAX_FIELD_OBJECTS:
+        if not state.limit_reported:
+            result.notes.append("ograniczono analizę nadmiernie złożonej hierarchii pól PDF")
+            state.limit_reported = True
+        return
+    if isinstance(field_ref, IndirectObject):
+        reference = (field_ref.idnum, field_ref.generation)
+        if reference in state.visited_refs:
+            return
+        state.visited_refs.add(reference)
+    state.object_count += 1
     field_obj = _resolve(field_ref)
     if not isinstance(field_obj, DictionaryObject):
         return
-    partial = str(field_obj.get("/T", "")).strip()
-    full_name = f"{parent_name}.{partial}" if parent_name and partial else partial or parent_name
+    partial = str(field_obj.get("/T", "")).strip()[:MAX_PDF_TEXT_LENGTH]
+    full_name = (f"{parent_name}.{partial}" if parent_name and partial else partial or parent_name)[
+        :MAX_PDF_TEXT_LENGTH
+    ]
 
     kids = _resolve(field_obj.get("/Kids"))
     if isinstance(kids, ArrayObject) and "/V" not in field_obj and "/FT" not in field_obj:
         for kid in kids:
-            _walk_field(kid, full_name, reader, result)
+            _walk_field(kid, full_name, reader, result, state, depth + 1)
         return
 
     if str(field_obj.get("/FT", "")) != "/Sig":
         # Pola inne niż podpis mogą mieć dzieci-podpisy w hierarchii.
         if isinstance(kids, ArrayObject):
             for kid in kids:
-                _walk_field(kid, full_name, reader, result)
+                _walk_field(kid, full_name, reader, result, state, depth + 1)
         return
 
     value = _resolve(field_obj.get("/V"))
@@ -146,7 +184,7 @@ def _walk_field(
 
 
 def _classify_subfilter(value: DictionaryObject) -> str:
-    subfilter = str(value.get("/SubFilter", "")).strip()
+    subfilter = str(value.get("/SubFilter", "")).strip()[:200]
     if subfilter in _SUBFILTER_LABELS:
         return _SUBFILTER_LABELS[subfilter]
     if subfilter:
@@ -183,6 +221,8 @@ def _find_widget(
                 wanted.add((kid.idnum, kid.generation))
 
     for page_index, page in enumerate(reader.pages):
+        if page_index >= MAX_WIDGET_SCAN_PAGES:
+            break
         annots = _resolve(page.get("/Annots"))
         if not isinstance(annots, ArrayObject):
             continue
@@ -207,6 +247,8 @@ def _rect_or_none(obj: Any) -> tuple[float, float, float, float] | None:
         x0, y0, x1, y1 = (float(v) for v in rect)
     except (TypeError, ValueError):
         return None
+    if not all(math.isfinite(value) for value in (x0, y0, x1, y1)):
+        return None
     x0, x1 = sorted((x0, x1))
     y0, y1 = sorted((y0, y1))
     if x1 - x0 < 1 or y1 - y0 < 1:  # niewidoczny podpis (rect zerowy)
@@ -225,7 +267,7 @@ def _parse_pdf_date(raw: str | None) -> str | None:
         return None
     match = _PDF_DATE.match(raw.strip())
     if not match:
-        return raw
+        return raw[:100]
     g = match.groupdict()
     date = f"{g['y']}-{g['mo'] or '01'}-{g['d'] or '01'}"
     if g["h"]:
@@ -236,7 +278,7 @@ def _parse_pdf_date(raw: str | None) -> str | None:
 def _text_or_none(value: Any) -> str | None:
     if value is None:
         return None
-    text = str(value).strip()
+    text = str(value).strip()[:MAX_PDF_TEXT_LENGTH]
     return text or None
 
 

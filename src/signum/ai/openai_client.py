@@ -7,6 +7,7 @@ import base64
 import requests
 
 from signum.ai.base import AIConnectionError, AIResponseError, VisionModel
+from signum.network import is_loopback_endpoint, normalize_ai_endpoint
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 
@@ -19,7 +20,9 @@ class OpenAIVisionModel(VisionModel):
     """
 
     def __init__(self, base_url: str, api_key: str, model: str, timeout_s: int = 300) -> None:
-        self._base_url = (base_url or DEFAULT_BASE_URL).rstrip("/")
+        self._base_url = normalize_ai_endpoint(base_url, DEFAULT_BASE_URL, "API OpenAI")
+        self._session = requests.Session()
+        self._session.trust_env = not is_loopback_endpoint(self._base_url)
         self._api_key = api_key
         self._model = model
         self._timeout_s = timeout_s
@@ -62,21 +65,20 @@ class OpenAIVisionModel(VisionModel):
             response = self._post("/chat/completions", payload)
 
         if response.status_code != 200:
-            raise AIResponseError(
-                f"API zwróciło HTTP {response.status_code}: {response.text[:300]}"
-            )
+            raise AIResponseError(f"API zwróciło HTTP {response.status_code}")
         try:
             return str(response.json()["choices"][0]["message"]["content"])
-        except (ValueError, KeyError, IndexError) as exc:
+        except (ValueError, KeyError, IndexError, TypeError) as exc:
             raise AIResponseError(f"Niepoprawna odpowiedź API: {exc}") from exc
 
     def _post(self, endpoint: str, payload: dict) -> requests.Response:
         try:
-            return requests.post(
+            return self._session.post(
                 f"{self._base_url}{endpoint}",
                 json=payload,
                 headers=self._headers(),
                 timeout=self._timeout_s,
+                allow_redirects=False,
             )
         except requests.exceptions.RequestException as exc:
             raise AIConnectionError(f"Brak połączenia z {self._base_url}: {exc}") from exc
@@ -85,8 +87,11 @@ class OpenAIVisionModel(VisionModel):
         if not self._api_key:
             raise AIResponseError("Nie podano klucza API")
         try:
-            response = requests.get(
-                f"{self._base_url}/models", headers=self._headers(), timeout=15
+            response = self._session.get(
+                f"{self._base_url}/models",
+                headers=self._headers(),
+                timeout=15,
+                allow_redirects=False,
             )
         except requests.exceptions.RequestException as exc:
             raise AIConnectionError(f"Brak połączenia z {self._base_url}: {exc}") from exc

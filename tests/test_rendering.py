@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+from signum.core import rendering
 from signum.core.rendering import (
     DocumentReadError,
     load_pages,
@@ -60,6 +61,26 @@ def test_uszkodzony_plik_rzuca_documentreaderror(tmp_path: Path) -> None:
     bad.write_bytes(b"nie-pdf")
     with pytest.raises(DocumentReadError):
         load_pages(bad, max_pages=1)
+
+
+def test_plik_przekraczajacy_limit_jest_odrzucany(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    image = tmp_path / "za_duzy.png"
+    image.write_bytes(b"12345")
+    monkeypatch.setattr(rendering, "MAX_INPUT_FILE_BYTES", 4)
+    with pytest.raises(DocumentReadError, match="limit bezpieczeństwa"):
+        load_pages(image, max_pages=1)
+
+
+def test_bomba_dekompresyjna_jest_odrzucana(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    image = tmp_path / "duzo_pikseli.png"
+    Image.new("RGB", (40, 40), "white").save(image)
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 100)
+    with pytest.raises(DocumentReadError):
+        load_pages(image, max_pages=1)
 
 
 def test_to_model_jpeg_pomniejsza(tmp_path: Path) -> None:
